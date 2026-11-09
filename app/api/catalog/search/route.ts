@@ -185,6 +185,7 @@ export async function GET(request: NextRequest) {
       const variantOrSlop = /\b(remix|cover|karaoke|nightcore|slowed|speed.?up|sped.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version|8d audio|bass boosted|reverb|chipmunk|pitch.?shift|acapella|demo version|fan.?made|type beat|reaction|lyrics video|official music video|visualizer|music video|full album|compilation)\b/i;
       if (!title || !artist || artist.toLowerCase() === "unknown artist") return false;
       if (track.provider === "Audius" && track.remixOf) return false;
+      if (track.provider === "Audius" && !track.artistCreditVerified) return false;
       if (variantOrSlop.test(searchableMetadata)) return false;
       if (/^(untitled|unknown|track ?\\d+)$/i.test(title)) return false;
       if (title.length < 2 || artist.length < 2 || title.length > 180 || artist.length > 120) return false;
