@@ -58,6 +58,31 @@ async function searchOpenverse(query: string) {
     }));
 }
 
+async function searchJamendo(query: string) {
+  const clientId = process.env.JAMENDO_CLIENT_ID;
+  if (!clientId) return [];
+  const params = new URLSearchParams({
+    client_id: clientId, format: "json", limit: "50", namesearch: query,
+    audioformat: "mp32", include: "musicinfo", type: "single albumtrack", order: "relevance"
+  });
+  const response = await fetch("https://api.jamendo.com/v3.0/tracks/?" + params.toString(), {
+    signal: AbortSignal.timeout(12000), next: { revalidate: 300 }
+  });
+  if (!response.ok) throw new Error("Jamendo search unavailable");
+  const payload = await response.json();
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  return rows.filter((track: any) => track?.id && track.audio && track.name && track.artist_name && Number(track.duration || 0) >= 45)
+    .map((track: any) => ({
+      id: "jamendo-" + track.id, title: String(track.name).trim(), artist: String(track.artist_name).trim(),
+      url: track.audio, artwork: track.album_image || track.image || undefined,
+      duration: Number(track.duration) || undefined, license: track.license_ccurl || undefined,
+      externalUrl: track.shareurl || ("https://www.jamendo.com/track/" + track.id),
+      downloadUrl: track.audiodownload_allowed === true ? track.audiodownload : undefined,
+      downloadable: track.audiodownload_allowed === true && Boolean(track.audiodownload),
+      source: "catalog", provider: "Jamendo", popularity: Number(track.popularity_total || 0)
+    }));
+}
+
 async function searchAudius(query: string) {
   const params = new URLSearchParams({ query, limit: "50", sort_method: "relevant" });
   const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
@@ -157,13 +182,15 @@ export async function GET(request: NextRequest) {
       raw.replace(/[“”‘’]/g, "").replace(/[()\[\]{}]/g, " ").replace(/\s+/g, " ").trim(),
       raw.split(/\s+/).filter(Boolean).join(" ")
     ])].filter(Boolean).slice(0, 3);
-    const [openverseBatch, audiusBatch, archive] = await Promise.all([
+    const [openverseBatch, audiusBatch, jamendoBatch, archive] = await Promise.all([
       Promise.allSettled(searchTerms.map(term => searchOpenverse(term))),
       Promise.allSettled(searchTerms.map(term => searchAudius(term))),
+      Promise.allSettled(searchTerms.map(term => searchJamendo(term))),
       searchArchive(raw).then(value => ({ status: "fulfilled" as const, value })).catch(error => ({ status: "rejected" as const, reason: error }))
     ]);
     const openverseResults = [...new Map(openverseBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const audiusResults = [...new Map(audiusBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
+    const jamendoResults = [...new Map(jamendoBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const openverseFailed = openverseBatch.every(result => result.status === "rejected");
     const audiusFailed = audiusBatch.every(result => result.status === "rejected");
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
@@ -177,7 +204,7 @@ export async function GET(request: NextRequest) {
       "golden hour": { title: "golden hour", artist: "JVKE", titleAliases: ["golden hour", "golden hour (official music video)"] }
     };
     const canonical = canonicalOverrides[normalized];
-    const candidates = [...openverseResults, ...audiusResults, ...archiveResults].filter((track: any) => {
+    const candidates = [...openverseResults, ...audiusResults, ...jamendoResults, ...archiveResults].filter((track: any) => {
       if (requestedVariant) return true;
       const title = String(track.title || "").trim();
       const artist = String(track.artist || "").trim();
@@ -217,16 +244,16 @@ export async function GET(request: NextRequest) {
       const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
       const openLicenceBoost = track.provider === "Openverse" ? 10 : 0;
       const exactArtistBoost = words.some(word => word.length > 2 && artist.includes(word)) ? 12 : 0;
-      const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
+      const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" || track.provider === "Jamendo" ? 3 : 0;
       return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus + openLicenceBoost };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
-    if (!results.length && openverseFailed && audiusFailed && archive.status === "rejected") {
+    if (!results.length && openverseFailed && audiusFailed && jamendoBatch.every(result => result.status === "rejected") && archive.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
       results,
-      sources: { openverse: openverseResults.length, audius: audiusResults.length, internetArchive: archiveResults.length }
+      sources: { openverse: openverseResults.length, audius: audiusResults.length, jamendo: jamendoResults.length, internetArchive: archiveResults.length }
     }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
   } catch {
     return NextResponse.json({ error: "Music search failed. Please try again." }, { status: 502 });
