@@ -189,7 +189,7 @@ export default function HomePage() {
       const data=await response.json();
       if(!response.ok)throw new Error(data.error||"Lyrics unavailable.");
       const raw=data.lyrics?.syncedLyrics||data.lyrics?.plainLyrics||"";
-      const lines=raw.split("\\n").map((line:string)=>line.replace(/^\\[[0-9:.]+\\]\\s*/,"").trim()).filter(Boolean);
+      const lines=raw.split(/\\r?\\n/).map((line:string)=>line.replace(/^\\[[0-9:.]+\\]\\s*/,"").trim()).filter(Boolean);
       setLyrics(lines);
       if(!lines.length)setLyricsMessage(data.message||"Lyrics aren't available for this track yet.");
     }catch(error:any){setLyricsMessage(error.message||"Couldn't load lyrics.");}
