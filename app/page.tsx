@@ -170,7 +170,7 @@ export default function HomePage() {
           id:x.id,title:x.title,artist:x.artist,url:x.url,artwork:x.artwork,
           source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl,provider:x.provider,externalUrl:x.externalUrl,preview:x.preview
         })));
-        if(!(data.results??[]).length)setMessage("No full-length tracks with a verified free-use license were found. Try another search.");
+        if(!(data.results??[]).length)setMessage("No matches found. Try the song title and artist together.");
       }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}
       finally{if(!controller.signal.aborted)setSearching(false);}
     },450);
@@ -189,7 +189,7 @@ export default function HomePage() {
       const data=await response.json();
       if(!response.ok)throw new Error(data.error||"Lyrics unavailable.");
       const raw=data.lyrics?.syncedLyrics||data.lyrics?.plainLyrics||"";
-      const lines=raw.split(/\\r?\\n/).map((line:string)=>line.replace(/^\\[[0-9:.]+\\]\\s*/,"").trim()).filter(Boolean);
+      const lines=raw.split(/\r?\n/).map((line:string)=>line.replace(/^\[[0-9:.]+\]\s*/,"").trim()).filter(Boolean);
       setLyrics(lines);
       if(!lines.length)setLyricsMessage(data.message||"Lyrics aren't available for this track yet.");
     }catch(error:any){setLyricsMessage(error.message||"Couldn't load lyrics.");}
