@@ -58,7 +58,7 @@ export default function HomePage() {
     const {data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
       const current=session?.user??null;setUser(current);
       if(current)void load(current.id);else{setTracks([]);setPlaylists([]);setLiked([]);setPlaying("");}
-      if(event==="SIGNED_IN"&&session){setShowAuth(false);setSent(false);setMessage("Signed in.");}
+      if(event==="SIGNED_IN"&&session){setShowAuth(false);setMessage("Signed in.");}
     });
     return()=>{alive=false;subscription.unsubscribe();};
   },[load]);
