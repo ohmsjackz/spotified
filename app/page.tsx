@@ -7,6 +7,36 @@ import { supabase } from "@/lib/supabase";
 type Track = { id:string; title:string; url:string; videoId?:string; durationText?:string; playback?:"youtube-embed"; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string; provider?:string; externalUrl?:string; downloadable?:boolean; downloadUrl?:string };
 type Playlist = { id:string; name:string };
 type Tab = "home"|"search"|"library";
+type OfflineRecord = { id:string; track:Track; blob:Blob; savedAt:number };
+const OFFLINE_DB = "spotified-offline-v1";
+function openOfflineDB():Promise<IDBDatabase>{
+  return new Promise((resolve,reject)=>{
+    const request=indexedDB.open(OFFLINE_DB,1);
+    request.onupgradeneeded=()=>{if(!request.result.objectStoreNames.contains("tracks"))request.result.createObjectStore("tracks",{keyPath:"id"});};
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(request.error);
+  });
+}
+async function saveOfflineRecord(record:OfflineRecord){
+  const db=await openOfflineDB();
+  await new Promise<void>((resolve,reject)=>{const tx=db.transaction("tracks","readwrite");tx.objectStore("tracks").put(record);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});
+  db.close();
+}
+async function readOfflineRecords():Promise<OfflineRecord[]>{
+  const db=await openOfflineDB();
+  const records=await new Promise<OfflineRecord[]>((resolve,reject)=>{const tx=db.transaction("tracks","readonly");const req=tx.objectStore("tracks").getAll();req.onsuccess=()=>resolve(req.result as OfflineRecord[]);req.onerror=()=>reject(req.error);});
+  db.close();return records;
+}
+async function readOfflineBlob(id:string):Promise<Blob|null>{
+  const db=await openOfflineDB();
+  const record=await new Promise<OfflineRecord|undefined>((resolve,reject)=>{const req=db.transaction("tracks","readonly").objectStore("tracks").get(id);req.onsuccess=()=>resolve(req.result as OfflineRecord|undefined);req.onerror=()=>reject(req.error);});
+  db.close();return record?.blob??null;
+}
+async function deleteOfflineRecord(id:string){
+  const db=await openOfflineDB();
+  await new Promise<void>((resolve,reject)=>{const tx=db.transaction("tracks","readwrite");tx.objectStore("tracks").delete(id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});
+  db.close();
+}
 
 export default function HomePage() {
   const [tab,setTab]=useState<Tab>("home"), [user,setUser]=useState<any>(null);
