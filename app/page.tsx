@@ -111,8 +111,14 @@ export default function HomePage() {
   }
   async function play(t:Track){
     if(t.youtubeId){
-      setPlaying(t.id);setCurrentTime(0);setDuration(209);setIsPlaying(true);
-      try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Ignore storage errors. */}
+      if(playing===t.id){
+        const command=isPlaying?"pauseVideo":"playVideo";
+        document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:command,args:[]}),"*");
+        setIsPlaying(!isPlaying);
+      }else{
+        setPlaying(t.id);setCurrentTime(0);setDuration(209);setIsPlaying(true);
+        try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Ignore storage errors. */}
+      }
       return;
     }
     if(!audio.current)return;
