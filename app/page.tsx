@@ -11,7 +11,7 @@ type Tab = "home"|"search"|"library";
 export default function HomePage() {
   const [tab,setTab]=useState<Tab>("home"), [user,setUser]=useState<any>(null);
   const [email,setEmail]=useState(""), [showAuth,setShowAuth]=useState(false), [sent,setSent]=useState(false);
-  const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]);
+  const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]), [activePlaylistId,setActivePlaylistId]=useState(""), [playlistTrackIds,setPlaylistTrackIds]=useState<string[]>([]);
   const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState("");
   const [playing,setPlaying]=useState(""), [isPlaying,setIsPlaying]=useState(false);
   const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);
@@ -109,6 +109,21 @@ export default function HomePage() {
     const {data,error}=await supabase.from("user_playlists").insert({user_id:user.id,name:name.trim()}).select("id,name").single();
     if(error)setMessage(error.message);else{setPlaylists(v=>[data as Playlist,...v]);setMessage("Playlist created.");}
   }
+  async function addToPlaylist(t:Track){
+    if(!supabase||!user){setShowAuth(true);return;}
+    if(!playlists.length){setMessage("Create a playlist first.");return;}
+    const name=window.prompt("Type a playlist name:\\n"+playlists.map(p=>p.name).join("\\n"));
+    const target=playlists.find(p=>p.name.toLowerCase()===name?.trim().toLowerCase());
+    if(!target){setMessage("Playlist not found. Check the name and try again.");return;}
+    const {error}=await supabase.from("playlist_tracks").insert({playlist_id:target.id,track_id:t.id,user_id:user.id});
+    if(error)setMessage(error.code==="23505"?"That track is already in this playlist.":error.message);else setMessage("Added to "+target.name+".");
+  }
+  async function openPlaylist(p:Playlist){
+    if(!supabase||!user)return;
+    const {data,error}=await supabase.from("playlist_tracks").select("track_id").eq("playlist_id",p.id).eq("user_id",user.id);
+    if(error){setMessage(error.message);return;}
+    setPlaylistTrackIds((data??[]).map((x:any)=>x.track_id));setActivePlaylistId(p.id);
+  }
   const current=tracks.find(t=>t.id===playing);
   const filtered=useMemo(()=>tracks.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())),[tracks,query]);
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
@@ -130,9 +145,9 @@ export default function HomePage() {
       </section>:tab==="home"?<>
         {!user&&<section className="welcome"><div><p className="overline">YOUR PERSONAL MUSIC LIBRARY</p><h2>Your music starts here.</h2><p>Sign in to upload tracks, save favorites and create playlists.</p></div><button className="action-button" onClick={()=>setShowAuth(true)}>Sign in</button></section>}
         <section className="section"><div className="section-title"><h2>Recently added</h2><button className="text-button" onClick={()=>changeTab("library")}>See all</button></div>
-          {tracks.length?<TrackList tracks={tracks.slice(0,10)} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><Music2 size={26}/><p>{user?"Your library is empty. Add music you own to get started.":"Your music will appear here after you sign in."}</p>{user&&<button className="secondary-button" onClick={()=>picker.current?.click()}><Upload size={16}/> Add music</button>}</div>}
+          {tracks.length?<TrackList tracks={tracks.slice(0,10)} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><Music2 size={26}/><p>{user?"Your library is empty. Add music you own to get started.":"Your music will appear here after you sign in."}</p>{user&&<button className="secondary-button" onClick={()=>picker.current?.click()}><Upload size={16}/> Add music</button>}</div>}
         </section>
-        {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like}/></section>}
+        {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></section>}
       </>:tab==="search"?<>
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
         <section className="section"><div className="section-title"><h2>{query?"Results":"Your music"}</h2><span>{filtered.length} tracks</span></div>
@@ -140,7 +155,7 @@ export default function HomePage() {
         </section>
       </>:<>
         <div className="library-actions"><button className="secondary-button" onClick={createPlaylist}><Plus size={17}/> Create playlist</button><button className="secondary-button" disabled={!user} onClick={()=>picker.current?.click()}><Upload size={17}/> Add music</button></div>
-        {playlists.length>0&&<section className="section"><h2 className="subheading">Playlists</h2>{playlists.map(p=><div className="playlist-row" key={p.id}><span className="playlist-icon"><ListMusic size={19}/></span><b>{p.name}</b></div>)}</section>}
+        {playlists.length>0&&<section className="section"><h2 className="subheading">Playlists</h2>{activePlaylistId?<><button className="text-button" onClick={()=>setActivePlaylistId("")}>‹ All playlists</button><TrackList tracks={tracks.filter(t=>playlistTrackIds.includes(t.id))} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></>:playlists.map(p=><button className="playlist-row" key={p.id} onClick={()=>void openPlaylist(p)}><span className="playlist-icon"><ListMusic size={19}/></span><b>{p.name}</b></button>)}</section>}
         <section className="section"><h2 className="subheading">Liked Songs</h2>{likedTracks.length?<TrackList tracks={likedTracks} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>Tracks you like will appear here.</p></div>}</section>
         <section className="section"><h2 className="subheading">Your uploads</h2>{tracks.length?<TrackList tracks={tracks} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>No uploaded tracks yet.</p></div>}</section>
         {!user&&<button className="action-button" onClick={()=>setShowAuth(true)}>Sign in</button>}
@@ -166,7 +181,7 @@ export default function HomePage() {
   </main>;
 }
 
-function TrackList({tracks,playing,liked,onPlay,onLike}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void}){
-  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>Uploaded music</span></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
+function TrackList({tracks,playing,liked,onPlay,onLike,onAdd}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void;onAdd:(t:Track)=>void}){
+  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>Uploaded music</span></button><button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
 }
 function time(v:number){if(!Number.isFinite(v)||v<0)return "0:00";return Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");}
