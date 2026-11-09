@@ -163,8 +163,9 @@ export default function HomePage() {
         {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></section>}
       </>:tab==="search"?<>
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
-        <section className="section"><div className="section-title"><h2>{query?"Results":"Your music"}</h2><span>{filtered.length} tracks</span></div>
-          {filtered.length?<TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{user?"No matching tracks in your library.":"Sign in to search your music."}</p>{!user&&<button className="secondary-button" onClick={()=>setShowAuth(true)}>Sign in</button>}</div>}
+        <section className="section"><div className="section-title"><h2>{query?"Search results":"Explore music"}</h2><span>{searching?"Searching…":catalog.length+" songs"}</span></div>
+          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No playable previews found. Try another search.":"Search for songs, artists or albums. Available previews can be played here."}</p></div>}
+          {query&&filtered.length>0&&<><h3 className="subheading">Your uploads</h3><TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></>}
         </section>
       </>:<>
         <div className="library-actions"><button className="secondary-button" onClick={createPlaylist}><Plus size={17}/> Create playlist</button><button className="secondary-button" disabled={!user} onClick={()=>picker.current?.click()}><Upload size={17}/> Add music</button></div>
