@@ -24,11 +24,14 @@ export async function GET(request: NextRequest) {
   if (raw.length < 2) return NextResponse.json({ results: [] });
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
 
-  const safeTerms = raw.replace(/[+\-!(){}\[\]^"~*?:\\/]/g, " ").split(/\s+/).filter(Boolean);
+  const safeTerms = raw.toLowerCase().match(/[a-z0-9]{2,}/g)?.slice(0,8) ?? [];
   if (!safeTerms.length) return NextResponse.json({ results: [] });
-  const query = "mediatype:audio AND " + safeTerms.map(term => '"' + term.replace(/"/g, "") + '"').join(" AND ");
-  const params = new URLSearchParams({ q: query, output: "json", rows: "60", page: "1" });
+  const termClauses = safeTerms.flatMap(term => [`title:${term}`, `creator:${term}`, `subject:${term}`]);
+  const licenseClause = ["licenseurl:*publicdomain*", "licenseurl:*creativecommons.org/licenses/by/4.0*", "licenseurl:*creativecommons.org/licenses/by-sa/4.0*"].join(" OR ");
+  const query = `mediatype:audio AND (${licenseClause}) AND (${termClauses.join(" OR ")})`;
+  const params = new URLSearchParams({ q: query, output: "json", rows: "100", page: "1" });
   for (const field of ["identifier", "title", "creator", "licenseurl", "year", "downloads"]) params.append("fl[]", field);
+  params.append("sort[]", "downloads desc");
 
   try {
     const searchResponse = await fetch("https://archive.org/advancedsearch.php?" + params.toString(), {
@@ -42,7 +45,7 @@ export async function GET(request: NextRequest) {
       doc.identifier && doc.licenseurl && allowedLicense(doc.licenseurl)
     );
 
-    const candidates = await Promise.all(docs.slice(0, 24).map(async (doc) => {
+    const candidates = await Promise.all(docs.slice(0, 40).map(async (doc) => {
       try {
         const response = await fetch("https://archive.org/metadata/" + encodeURIComponent(doc.identifier!), {
           headers: { "User-Agent": "Spotified/1.0 (music search)" },
@@ -54,15 +57,22 @@ export async function GET(request: NextRequest) {
         const itemLicense = text(metadata.metadata?.licenseurl) || text(doc.licenseurl);
         if (!allowedLicense(itemLicense)) return null;
         const files: ArchiveFile[] = metadata.files ?? [];
-        const audioFiles = files.filter(file =>
-          file.name && file.name.toLowerCase().endsWith(".mp3") &&
-          file.private !== "true" && file.source !== "metadata"
-        );
+        // MP3, M4A/MP4 and WAV are broadly supported by current Safari and Chrome.
+        const audioFiles = files.filter(file => {
+          if (!file.name || file.private === "true" || file.source === "metadata") return false;
+          return /\.(mp3|m4a|mp4|wav)$/i.test(file.name);
+        });
         audioFiles.sort((a, b) => {
-          const score = (file: ArchiveFile) =>
-            (file.format?.toLowerCase().includes("vbr mp3") ? 4 : 0) +
-            (file.source === "derivative" ? 2 : 0) +
-            (Number(file.size || 0) > 100000 ? 1 : 0);
+          const score = (file: ArchiveFile) => {
+            const name = (file.name ?? "").toLowerCase();
+            const format = (file.format ?? "").toLowerCase();
+            return (name.endsWith(".mp3") ? 10 : 0) +
+              (name.endsWith(".m4a") || name.endsWith(".mp4") ? 8 : 0) +
+              (name.endsWith(".wav") ? 5 : 0) +
+              (format.includes("vbr mp3") ? 2 : 0) +
+              (file.source === "derivative" ? 1 : 0) +
+              (Number(file.size || 0) > 100000 ? 1 : 0);
+          };
           return score(b) - score(a);
         });
         const file = audioFiles[0];
@@ -85,7 +95,7 @@ export async function GET(request: NextRequest) {
       }
     }));
 
-    return NextResponse.json({ results: candidates.filter(Boolean).slice(0, 20) }, {
+    return NextResponse.json({ results: candidates.filter(Boolean).slice(0, 30) }, {
       headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" }
     });
   } catch (error) {
