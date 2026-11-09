@@ -4,6 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Spotified",
   description: "A personal music library and player.",
+  manifest: "/manifest.json",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Spotified" }
 };
 export const viewport: Viewport = {
