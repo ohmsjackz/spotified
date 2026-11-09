@@ -131,10 +131,13 @@ export async function GET(request: NextRequest) {
       ? candidates.filter((track: any) => {
           const title = String(track.title || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
           const artist = String(track.artist || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
-          const titleMatch = canonical.titleAliases.some(alias => title === alias || title.startsWith(alias + " "));
-          // Audius sometimes exposes a creator handle instead of the credited artist.
-          // Accept an explicit artist credit in the track title, but do not claim the
-          // uploader itself is the artist.
+          const titleMatch = canonical.titleAliases.some(alias => {
+            const normalizedAlias = alias.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+            return title === normalizedAlias || title.startsWith(normalizedAlias + " ") ||
+              (title.includes(normalizedAlias) && title.includes(canonical.artist.toLowerCase()));
+          });
+          // For this explicitly user-confirmed recording, the uploader may differ
+          // from the credited performer. Display the credited artist, not the uploader.
           return titleMatch && (artist === canonical.artist.toLowerCase() || title.includes(canonical.artist.toLowerCase()));
         }).map((track: any) => ({ ...track, title: canonical.title, artist: canonical.artist }))
       : candidates;
