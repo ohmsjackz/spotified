@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle, ExternalLink } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string; provider?:string; externalUrl?:string };
+type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string; provider?:string; externalUrl?:string; preview?:boolean };
 type Playlist = { id:string; name:string };
 type Tab = "home"|"search"|"library";
 
@@ -14,10 +14,24 @@ export default function HomePage() {
   const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]), [activePlaylistId,setActivePlaylistId]=useState(""), [playlistTrackIds,setPlaylistTrackIds]=useState<string[]>([]);
   const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState(""), [catalog,setCatalog]=useState<Track[]>([]), [searching,setSearching]=useState(false);
   const [playing,setPlaying]=useState(""), [isPlaying,setIsPlaying]=useState(false);
-  const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);
+  const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);\n  const [lyrics,setLyrics]=useState<string[]>([]), [lyricsOpen,setLyricsOpen]=useState(false), [lyricsLoading,setLyricsLoading]=useState(false), [lyricsMessage,setLyricsMessage]=useState("");
   const [shuffle,setShuffle]=useState(false), [repeat,setRepeat]=useState(false);
   const [busy,setBusy]=useState(false), [message,setMessage]=useState("");
   const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null);
+
+  useEffect(()=>{
+    try{
+      const saved=sessionStorage.getItem("spotified-playback");
+      if(!saved)return;
+      const item=JSON.parse(saved) as {track:Track;position:number};
+      if(!item?.track?.id||!item.track.url)return;
+      if(item.track.source==="catalog")setCatalog(v=>v.some(t=>t.id===item.track.id)?v:[item.track,...v]);
+      else setTracks(v=>v.some(t=>t.id===item.track.id)?v:[item.track,...v]);
+      setPlaying(item.track.id);
+      setCurrentTime(Number(item.position)||0);
+      if(audio.current){audio.current.src=item.track.url;audio.current.load();}
+    }catch{/* Ignore invalid saved playback state. */}
+  },[]);
 
   const load = useCallback(async (uid:string) => {
     if(!supabase) return;
@@ -154,7 +168,7 @@ export default function HomePage() {
         if(!res.ok)throw new Error(data.error??"Music search is temporarily unavailable.");
         setCatalog((data.results??[]).map((x:any)=>({
           id:x.id,title:x.title,artist:x.artist,url:x.url,artwork:x.artwork,
-          source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl,provider:x.provider,externalUrl:x.externalUrl
+          source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl,provider:x.provider,externalUrl:x.externalUrl,preview:x.preview
         })));
         if(!(data.results??[]).length)setMessage("No full-length tracks with a verified free-use license were found. Try another search.");
       }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}
@@ -164,6 +178,23 @@ export default function HomePage() {
   },[query]);
 
   const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
+
+  async function loadLyrics(){
+    if(!current)return;
+    setLyricsOpen(true);setLyricsLoading(true);setLyrics([]);setLyricsMessage("");
+    try{
+      const params=new URLSearchParams({track:current.title,artist:current.artist||""});
+      if(duration>0)params.set("duration",String(Math.round(duration)));
+      const response=await fetch("/api/lyrics?"+params.toString());
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error||"Lyrics unavailable.");
+      const raw=data.lyrics?.syncedLyrics||data.lyrics?.plainLyrics||"";
+      const lines=raw.split("\\n").map((line:string)=>line.replace(/^\\[[0-9:.]+\\]\\s*/,"").trim()).filter(Boolean);
+      setLyrics(lines);
+      if(!lines.length)setLyricsMessage(data.message||"Lyrics aren't available for this track yet.");
+    }catch(error:any){setLyricsMessage(error.message||"Couldn't load lyrics.");}
+    finally{setLyricsLoading(false);}
+  }
 
   // Publish the active track to the browser/OS Now Playing surface (Lock Screen and supported Dynamic Island UI).
   useEffect(()=>{
@@ -231,8 +262,8 @@ export default function HomePage() {
         {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></section>}
       </>:tab==="search"?<>
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
-        <section className="section"><div className="section-title"><h2>{query?"Search results":"Find music"}</h2><span>{searching?"Searching…":catalog.length+" tracks"}</span></div>
-          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No matching full tracks found. Try a shorter search or another artist.":"Search songs, artists or albums. Play full-length openly licensed tracks directly in Safari or Chrome—no upload needed."}</p></div>}
+        <section className="section"><div className="section-title"><h2>{query?"Search results":"Browse all"}</h2><span>{searching?"Searching…":catalog.length+" tracks"}</span></div>
+          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No matches yet. Try the song title and artist together, like “golden hour JVKE”.":"Search songs or artists. Find full-length open tracks and official 30-second previews from Apple’s catalogue."}</p></div>}
           {query&&filtered.length>0&&<><h3 className="subheading">Your uploads</h3><TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></>}
         </section>
       </>:<>
@@ -246,16 +277,17 @@ export default function HomePage() {
     <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
     {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
     {current&&<section className="player">
-      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?(current.provider||"Music catalogue"):"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
+      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?(current.provider||"Music catalogue"):"Uploaded music")}{current.preview?" · Preview":""}</span></div><button className="player-icon" onClick={()=>void loadLyrics()} aria-label="Show lyrics"><span className="lyrics-icon">LYRICS</span></button><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
       <div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
       <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
     </section>}
+    {lyricsOpen&&<div className="lyrics-overlay" role="dialog" aria-modal="true" aria-label="Lyrics"><div className="lyrics-sheet"><div className="lyrics-head"><div><p className="overline">NOW PLAYING</p><h2>{current?.title||"Lyrics"}</h2><span>{current?.artist}</span></div><button onClick={()=>setLyricsOpen(false)} aria-label="Close lyrics"><X size={22}/></button></div>{lyricsLoading?<div className="lyrics-empty">Finding lyrics…</div>:lyrics.length?<div className="lyrics-lines">{lyrics.map((line,i)=><p key={i}>{line}</p>)}</div>:<div className="lyrics-empty">{lyricsMessage||"Lyrics aren't available for this track yet."}</div>}<small>Lyrics provided by LRCLIB where available.</small></div></div>}
     <nav className="tab-bar" aria-label="Main navigation">
       <button className={tab==="home"?"active":""} onClick={()=>changeTab("home")}><Home size={22}/><span>Home</span></button>
       <button className={tab==="search"?"active":""} onClick={()=>changeTab("search")}><Search size={22}/><span>Search</span></button>
       <button className={tab==="library"?"active":""} onClick={()=>changeTab("library")}><Library size={22}/><span>Your Library</span></button>
     </nav>
-    <audio ref={audio} preload="metadata" playsInline onLoadedMetadata={e=>setDuration(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)} onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime)} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onError={()=>{if(playing)setMessage("The audio host rejected this file or the format is unsupported. Try another result or Open audio in Safari/Chrome.");setIsPlaying(false);}} onEnded={()=>{
+    <audio ref={audio} preload="metadata" playsInline onLoadedMetadata={e=>{const d=Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0;setDuration(d);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);if(item.track?.id===playing&&Number(item.position)>0&&Number(item.position)<d)e.currentTarget.currentTime=Number(item.position);}}catch{/* Ignore saved playback errors. */}}} onTimeUpdate={e=>{const position=e.currentTarget.currentTime;setCurrentTime(position);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);sessionStorage.setItem("spotified-playback",JSON.stringify({...item,position}));}}catch{/* Ignore storage errors. */}}} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onError={()=>{if(playing)setMessage("The audio host rejected this file or the format is unsupported. Try another result or Open audio in Safari/Chrome.");setIsPlaying(false);}} onEnded={()=>{
       if(repeat&&audio.current){audio.current.currentTime=0;void audio.current.play();return;}
       if(shuffle&&tracks.length+catalog.length>1){const list=[...tracks,...catalog].filter(t=>t.id!==playing);const next=list[Math.floor(Math.random()*list.length)];if(next)void play(next);}
       else skip(1);
