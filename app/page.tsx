@@ -47,6 +47,8 @@ export default function HomePage() {
         if(error)setMessage("Email verification failed. Request a new link and open it in the same browser.");
       }
     };
+    const authError = new URLSearchParams(window.location.hash.slice(1)).get("error_description");
+    if(authError) setMessage(decodeURIComponent(authError.replace(/\\+/g," ")));
     void finish();
     supabase.auth.getSession().then(({data,error})=>{
       if(!alive)return;
@@ -64,7 +66,7 @@ export default function HomePage() {
   async function signIn(e:React.FormEvent){
     e.preventDefault(); if(!supabase)return;
     setBusy(true);setMessage("");
-    const {error}=await supabase.auth.signInWithOtp({email:email.trim(),options:{emailRedirectTo:window.location.origin,shouldCreateUser:true}});
+    const {error}=await supabase.auth.signInWithOtp({email:email.trim(),options:{emailRedirectTo:process.env.NEXT_PUBLIC_SITE_URL || window.location.origin,shouldCreateUser:true}});
     setBusy(false);
     if(error)setMessage(error.message);else{setSent(true);setMessage("Email sent. Open the newest link in this same browser.");}
   }
