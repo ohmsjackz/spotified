@@ -121,6 +121,7 @@ export default function HomePage() {
     if(error)setMessage(error.message);else{setPlaylists(v=>[data as Playlist,...v]);setMessage("Playlist created.");}
   }
   async function addToPlaylist(t:Track){
+    if(t.source==="catalog"){setMessage("Catalogue previews cannot be added to personal playlists. Like the track to save its details.");return;}
     if(!supabase||!user){setShowAuth(true);return;}
     if(!playlists.length){setMessage("Create a playlist first.");return;}
     const name=window.prompt("Type a playlist name:\\n"+playlists.map(p=>p.name).join("\\n"));
@@ -150,7 +151,9 @@ export default function HomePage() {
       finally{if(!controller.signal.aborted)setSearching(false);}
     },350);
     return()=>{window.clearTimeout(timer);controller.abort();};
-  },[query]);\n\n  const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
+  },[query]);
+
+  const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
   const filtered=useMemo(()=>tracks.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())),[tracks,query]);
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
   function changeTab(t:Tab){setTab(t);setShowAuth(false);}
