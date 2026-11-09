@@ -23,6 +23,53 @@ function artworkUrl(value: any): string | undefined {
   return value["480x480"] || value["1000x1000"] || value["150x150"] || value["original"] || Object.values(value).find(x => typeof x === "string") as string | undefined;
 }
 
+
+async function getSpotifyToken() {
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+  const auth = Buffer.from(clientId + ":" + clientSecret).toString("base64");
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { Authorization: "Basic " + auth, "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials" }),
+    signal: AbortSignal.timeout(10000),
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("Spotify authentication failed");
+  const payload = await response.json();
+  return typeof payload.access_token === "string" ? payload.access_token : null;
+}
+
+async function searchSpotify(query: string) {
+  const token = await getSpotifyToken();
+  if (!token) return [];
+  const params = new URLSearchParams({ q: query, type: "track", market: "TH", limit: "50" });
+  const response = await fetch("https://api.spotify.com/v1/search?" + params.toString(), {
+    headers: { Authorization: "Bearer " + token },
+    signal: AbortSignal.timeout(10000),
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error("Spotify catalogue search unavailable");
+  const payload = await response.json();
+  const rows = Array.isArray(payload.tracks?.items) ? payload.tracks.items : [];
+  return rows.filter((track: any) => track?.id && track.name && Array.isArray(track.artists) && track.artists.length)
+    .map((track: any) => ({
+      id: "spotify-" + track.id,
+      title: track.name,
+      artist: track.artists.map((artist: any) => artist.name).join(", "),
+      artwork: track.album?.images?.[0]?.url,
+      duration: track.duration_ms ? Math.round(track.duration_ms / 1000) : undefined,
+      popularity: Number(track.popularity || 0),
+      provider: "Spotify",
+      source: "catalog",
+      externalUrl: track.external_urls?.spotify || ("https://open.spotify.com/track/" + track.id),
+      spotifyUri: track.uri,
+      playableInSpotify: track.is_playable !== false,
+      previewUrl: track.preview_url || undefined
+    }));
+}
+
 async function searchAudius(query: string) {
   const params = new URLSearchParams({ query, limit: "50", sort_method: "relevant" });
   const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
@@ -122,11 +169,14 @@ export async function GET(request: NextRequest) {
       raw.replace(/[“”‘’]/g, "").replace(/[()\[\]{}]/g, " ").replace(/\s+/g, " ").trim(),
       raw.split(/\s+/).filter(Boolean).join(" ")
     ])].filter(Boolean).slice(0, 3);
-    const [audiusBatch, archive] = await Promise.all([
+    const [spotifyBatch, audiusBatch, archive] = await Promise.all([
+      Promise.allSettled(searchTerms.map(term => searchSpotify(term))),
       Promise.allSettled(searchTerms.map(term => searchAudius(term))),
-      searchArchive(raw)
+      searchArchive(raw).then(value => ({ status: "fulfilled" as const, value })).catch(error => ({ status: "rejected" as const, reason: error }))
     ]);
+    const spotifyResults = [...new Map(spotifyBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const audiusResults = [...new Map(audiusBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
+    const spotifyFailed = spotifyBatch.every(result => result.status === "rejected");
     const audiusFailed = audiusBatch.every(result => result.status === "rejected");
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
     const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
@@ -139,7 +189,7 @@ export async function GET(request: NextRequest) {
       "golden hour": { title: "golden hour", artist: "JVKE", titleAliases: ["golden hour", "golden hour (official music video)"] }
     };
     const canonical = canonicalOverrides[normalized];
-    const candidates = [...audiusResults, ...archiveResults].filter((track: any) => {
+    const candidates = [...spotifyResults, ...audiusResults, ...archiveResults].filter((track: any) => {
       if (requestedVariant) return true;
       const title = String(track.title || "").trim();
       const artist = String(track.artist || "").trim();
@@ -176,17 +226,18 @@ export async function GET(request: NextRequest) {
       const startsWithTitle = title.startsWith(normalized) ? 15 : 0;
       const relevance = (allTermsMatch ? 20 : 0) + titleHits * 5 + artistHits * 3 + exactTitle + startsWithTitle;
       const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
+      const officialCatalogueBoost = track.provider === "Spotify" ? 25 : 0;
       const exactArtistBoost = words.some(word => word.length > 2 && artist.includes(word)) ? 12 : 0;
       const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
-      return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus };
+      return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus + officialCatalogueBoost };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
-    if (!results.length && audiusFailed && archive.status === "rejected") {
+    if (!results.length && spotifyFailed && audiusFailed && archive.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
       results,
-      sources: { audius: audiusResults.length, internetArchive: archiveResults.length }
+      sources: { spotify: spotifyResults.length, audius: audiusResults.length, internetArchive: archiveResults.length }
     }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
   } catch {
     return NextResponse.json({ error: "Music search failed. Please try again." }, { status: 502 });
