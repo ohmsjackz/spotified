@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle } from "lucide-react";
+import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle, ExternalLink } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string };
@@ -97,12 +97,18 @@ export default function HomePage() {
   async function play(t:Track){
     if(!audio.current)return;
     if(playing===t.id){
-      if(audio.current.paused){try{await audio.current.play();}catch{setMessage("Playback failed.");}}
+      if(audio.current.paused){try{await audio.current.play();}catch{setMessage("Safari or Chrome could not start this stream. Try opening the audio directly.");}}
       else audio.current.pause();
       return;
     }
-    audio.current.src=t.url;audio.current.load();
-    try{await audio.current.play();setPlaying(t.id);setCurrentTime(0);}catch{setMessage("This audio format cannot be played in Safari.");}
+    audio.current.pause();
+    audio.current.src=t.url;
+    audio.current.load();
+    setPlaying(t.id);
+    setCurrentTime(0);
+    setDuration(0);
+    try{await audio.current.play();}
+    catch{setIsPlaying(false);setMessage("This stream could not start in this browser. Use Open audio to test the source directly.");}
   }
   async function like(t:Track){
     if(!supabase||!user){setShowAuth(true);return;}
@@ -162,9 +168,11 @@ export default function HomePage() {
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
   function changeTab(t:Tab){setTab(t);setShowAuth(false);}
   function skip(dir:number){
-    if(!tracks.length)return;
-    const i=tracks.findIndex(t=>t.id===playing), n=(i+dir+tracks.length)%tracks.length;
-    void play(tracks[n]);
+    const queue=[...tracks,...catalog];
+    if(!queue.length)return;
+    const i=queue.findIndex(t=>t.id===playing);
+    const n=(Math.max(i,0)+dir+queue.length)%queue.length;
+    void play(queue[n]);
   }
 
   return <main className="app-shell">
@@ -186,7 +194,7 @@ export default function HomePage() {
       </>:tab==="search"?<>
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
         <section className="section"><div className="section-title"><h2>{query?"Search results":"Find music"}</h2><span>{searching?"Searching…":catalog.length+" tracks"}</span></div>
-          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No playable previews found. Try another search.":"Search songs, artists or albums. Play full-length tracks from openly licensed music collections—no upload needed."}</p></div>}
+          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No matching full tracks found. Try a shorter search or another artist.":"Search songs, artists or albums. Play full-length openly licensed tracks directly in Safari or Chrome—no upload needed."}</p></div>}
           {query&&filtered.length>0&&<><h3 className="subheading">Your uploads</h3><TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></>}
         </section>
       </>:<>
@@ -209,7 +217,7 @@ export default function HomePage() {
       <button className={tab==="search"?"active":""} onClick={()=>changeTab("search")}><Search size={22}/><span>Search</span></button>
       <button className={tab==="library"?"active":""} onClick={()=>changeTab("library")}><Library size={22}/><span>Your Library</span></button>
     </nav>
-    <audio ref={audio} preload="metadata" onLoadedMetadata={e=>setDuration(e.currentTarget.duration||0)} onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime)} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onEnded={()=>{
+    <audio ref={audio} preload="metadata" playsInline onLoadedMetadata={e=>setDuration(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)} onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime)} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onError={()=>{if(playing)setMessage("The audio host rejected this file or the format is unsupported. Try another result or Open audio in Safari/Chrome.");setIsPlaying(false);}} onEnded={()=>{
       if(repeat&&audio.current){audio.current.currentTime=0;void audio.current.play();return;}
       if(shuffle&&tracks.length+catalog.length>1){const list=[...tracks,...catalog].filter(t=>t.id!==playing);const next=list[Math.floor(Math.random()*list.length)];if(next)void play(next);}
       else skip(1);
@@ -218,6 +226,6 @@ export default function HomePage() {
 }
 
 function TrackList({tracks,playing,liked,onPlay,onLike,onAdd}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void;onAdd:(t:Track)=>void}){
-  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{t.artist??(t.source==="catalog"?"Full track · Internet Archive":"Your upload")}</span></button><button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
+  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{t.artist??(t.source==="catalog"?"Full track · Internet Archive":"Your upload")}</span></button>{t.source==="catalog"&&<button className="like" onClick={()=>window.open(t.url,"_blank","noopener,noreferrer")} aria-label="Open audio directly in browser"><ExternalLink size={16}/></button>}<button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
 }
 function time(v:number){if(!Number.isFinite(v)||v<0)return "0:00";return Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");}
