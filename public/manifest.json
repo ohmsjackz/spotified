@@ -1,0 +1,10 @@
+{
+  "name": "Spotified",
+  "short_name": "Spotified",
+  "description": "Your personal music player and offline library.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080a09",
+  "theme_color": "#080a09",
+  "orientation": "portrait"
+}
