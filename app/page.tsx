@@ -151,13 +151,13 @@ export default function HomePage() {
       </>:tab==="search"?<>
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
         <section className="section"><div className="section-title"><h2>{query?"Results":"Your music"}</h2><span>{filtered.length} tracks</span></div>
-          {filtered.length?<TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>{user?"No matching tracks in your library.":"Sign in to search your music."}</p>{!user&&<button className="secondary-button" onClick={()=>setShowAuth(true)}>Sign in</button>}</div>}
+          {filtered.length?<TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{user?"No matching tracks in your library.":"Sign in to search your music."}</p>{!user&&<button className="secondary-button" onClick={()=>setShowAuth(true)}>Sign in</button>}</div>}
         </section>
       </>:<>
         <div className="library-actions"><button className="secondary-button" onClick={createPlaylist}><Plus size={17}/> Create playlist</button><button className="secondary-button" disabled={!user} onClick={()=>picker.current?.click()}><Upload size={17}/> Add music</button></div>
         {playlists.length>0&&<section className="section"><h2 className="subheading">Playlists</h2>{activePlaylistId?<><button className="text-button" onClick={()=>setActivePlaylistId("")}>‹ All playlists</button><TrackList tracks={tracks.filter(t=>playlistTrackIds.includes(t.id))} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></>:playlists.map(p=><button className="playlist-row" key={p.id} onClick={()=>void openPlaylist(p)}><span className="playlist-icon"><ListMusic size={19}/></span><b>{p.name}</b></button>)}</section>}
-        <section className="section"><h2 className="subheading">Liked Songs</h2>{likedTracks.length?<TrackList tracks={likedTracks} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>Tracks you like will appear here.</p></div>}</section>
-        <section className="section"><h2 className="subheading">Your uploads</h2>{tracks.length?<TrackList tracks={tracks} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>No uploaded tracks yet.</p></div>}</section>
+        <section className="section"><h2 className="subheading">Liked Songs</h2>{likedTracks.length?<TrackList tracks={likedTracks} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>Tracks you like will appear here.</p></div>}</section>
+        <section className="section"><h2 className="subheading">Your uploads</h2>{tracks.length?<TrackList tracks={tracks} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>No uploaded tracks yet.</p></div>}</section>
         {!user&&<button className="action-button" onClick={()=>setShowAuth(true)}>Sign in</button>}
       </>}
     </section>
