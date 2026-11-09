@@ -24,49 +24,37 @@ function artworkUrl(value: any): string | undefined {
 }
 
 
-async function getSpotifyToken() {
-  const clientId = process.env.SPOTIFY_CLIENT_ID;
-  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-  const auth = Buffer.from(clientId + ":" + clientSecret).toString("base64");
-  const response = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: { Authorization: "Basic " + auth, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "client_credentials" }),
-    signal: AbortSignal.timeout(10000),
-    cache: "no-store"
+async function searchOpenverse(query: string) {
+  const params = new URLSearchParams({
+    q: query,
+    category: "music",
+    page_size: "30",
+    license: "cc0,pdm,by,by-sa,by-nc,by-nc-sa,by-nd,by-nc-nd",
+    filter_dead: "true"
   });
-  if (!response.ok) throw new Error("Spotify authentication failed");
-  const payload = await response.json();
-  return typeof payload.access_token === "string" ? payload.access_token : null;
-}
-
-async function searchSpotify(query: string) {
-  const token = await getSpotifyToken();
-  if (!token) return [];
-  const params = new URLSearchParams({ q: query, type: "track", market: "TH", limit: "50" });
-  const response = await fetch("https://api.spotify.com/v1/search?" + params.toString(), {
-    headers: { Authorization: "Bearer " + token },
-    signal: AbortSignal.timeout(10000),
-    cache: "no-store"
+  const response = await fetch("https://api.openverse.org/v1/audio/?" + params.toString(), {
+    headers: { "User-Agent": "Spotified/1.0 (open music discovery)" },
+    signal: AbortSignal.timeout(12000),
+    next: { revalidate: 300 }
   });
-  if (!response.ok) throw new Error("Spotify catalogue search unavailable");
+  if (!response.ok) throw new Error("Openverse search unavailable");
   const payload = await response.json();
-  const rows = Array.isArray(payload.tracks?.items) ? payload.tracks.items : [];
-  return rows.filter((track: any) => track?.id && track.name && Array.isArray(track.artists) && track.artists.length)
-    .map((track: any) => ({
-      id: "spotify-" + track.id,
-      title: track.name,
-      artist: track.artists.map((artist: any) => artist.name).join(", "),
-      artwork: track.album?.images?.[0]?.url,
-      duration: track.duration_ms ? Math.round(track.duration_ms / 1000) : undefined,
-      popularity: Number(track.popularity || 0),
-      provider: "Spotify",
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  return rows.filter((item: any) => item?.id && item.url && item.title && item.creator && item.category === "music")
+    .map((item: any) => ({
+      id: "openverse-" + item.id,
+      title: String(item.title).trim(),
+      artist: String(item.creator).trim(),
+      url: item.url,
+      artwork: item.thumbnail || undefined,
+      duration: Number(item.duration || 0) > 0 ? Math.round(Number(item.duration) / 1000) : undefined,
+      license: item.license_url || item.license || "Open licence; verify terms",
+      licenseCode: item.license || undefined,
+      attribution: item.attribution || undefined,
+      externalUrl: item.foreign_landing_url || item.detail_url,
       source: "catalog",
-      externalUrl: track.external_urls?.spotify || ("https://open.spotify.com/track/" + track.id),
-      spotifyUri: track.uri,
-      playableInSpotify: track.is_playable !== false,
-      previewUrl: track.preview_url || undefined
+      provider: "Openverse",
+      downloadable: true
     }));
 }
 
@@ -102,7 +90,7 @@ async function searchAudius(query: string) {
 }
 
 async function searchArchive(raw: string) {
-  const safeTerms = raw.toLowerCase().match(/[a-z0-9]{2,}/g)?.slice(0,8) ?? [];
+  const safeTerms = raw.toLowerCase().match(/[\\p{L}\\p{N}]{2,}/gu)?.slice(0,8) ?? [];
   if (!safeTerms.length) return [];
   const termClauses = safeTerms.flatMap(term => [`title:${term}`, `creator:${term}`, `subject:${term}`]);
   const licenseClause = ["licenseurl:*publicdomain*", "licenseurl:*creativecommons.org/licenses/by/4.0*", "licenseurl:*creativecommons.org/licenses/by-sa/4.0*"].join(" OR ");
@@ -169,17 +157,17 @@ export async function GET(request: NextRequest) {
       raw.replace(/[“”‘’]/g, "").replace(/[()\[\]{}]/g, " ").replace(/\s+/g, " ").trim(),
       raw.split(/\s+/).filter(Boolean).join(" ")
     ])].filter(Boolean).slice(0, 3);
-    const [spotifyBatch, audiusBatch, archive] = await Promise.all([
-      Promise.allSettled(searchTerms.map(term => searchSpotify(term))),
+    const [openverseBatch, audiusBatch, archive] = await Promise.all([
+      Promise.allSettled(searchTerms.map(term => searchOpenverse(term))),
       Promise.allSettled(searchTerms.map(term => searchAudius(term))),
       searchArchive(raw).then(value => ({ status: "fulfilled" as const, value })).catch(error => ({ status: "rejected" as const, reason: error }))
     ]);
-    const spotifyResults = [...new Map(spotifyBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
+    const openverseResults = [...new Map(openverseBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const audiusResults = [...new Map(audiusBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
-    const spotifyFailed = spotifyBatch.every(result => result.status === "rejected");
+    const openverseFailed = openverseBatch.every(result => result.status === "rejected");
     const audiusFailed = audiusBatch.every(result => result.status === "rejected");
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
-    const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
+    const normalized = raw.toLowerCase().replace(/[^\\p{L}\\p{N} ]/gu, " ").trim();
     const words = normalized.split(/\s+/).filter(Boolean);
 
     // A small, explicit canonical catalogue prevents unrelated same-title uploads
@@ -189,7 +177,7 @@ export async function GET(request: NextRequest) {
       "golden hour": { title: "golden hour", artist: "JVKE", titleAliases: ["golden hour", "golden hour (official music video)"] }
     };
     const canonical = canonicalOverrides[normalized];
-    const candidates = [...spotifyResults, ...audiusResults, ...archiveResults].filter((track: any) => {
+    const candidates = [...openverseResults, ...audiusResults, ...archiveResults].filter((track: any) => {
       if (requestedVariant) return true;
       const title = String(track.title || "").trim();
       const artist = String(track.artist || "").trim();
@@ -226,18 +214,18 @@ export async function GET(request: NextRequest) {
       const startsWithTitle = title.startsWith(normalized) ? 15 : 0;
       const relevance = (allTermsMatch ? 20 : 0) + titleHits * 5 + artistHits * 3 + exactTitle + startsWithTitle;
       const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
-      const officialCatalogueBoost = track.provider === "Spotify" ? 25 : 0;
+      const openLicenceBoost = track.provider === "Openverse" ? 10 : 0;
       const exactArtistBoost = words.some(word => word.length > 2 && artist.includes(word)) ? 12 : 0;
       const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
-      return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus + officialCatalogueBoost };
+      return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus + openLicenceBoost };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
-    if (!results.length && spotifyFailed && audiusFailed && archive.status === "rejected") {
+    if (!results.length && openverseFailed && audiusFailed && archive.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
       results,
-      sources: { spotify: spotifyResults.length, audius: audiusResults.length, internetArchive: archiveResults.length }
+      sources: { openverse: openverseResults.length, audius: audiusResults.length, internetArchive: archiveResults.length }
     }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
   } catch {
     return NextResponse.json({ error: "Music search failed. Please try again." }, { status: 502 });
