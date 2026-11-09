@@ -110,22 +110,6 @@ export async function GET(request: NextRequest) {
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
   try {
     const normalizedQuery = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
-    if (normalizedQuery.includes("golden hour") && normalizedQuery.includes("jvke") && !normalizedQuery.includes("remix")) {
-      return NextResponse.json({
-        results: [{
-          id: "youtube-jvke-golden-hour-official",
-          title: "golden hour",
-          artist: "JVKE",
-          youtubeId: "PEM0Vs8jf1w",
-          url: "https://www.youtube.com/watch?v=PEM0Vs8jf1w",
-          artwork: "https://i.ytimg.com/vi/PEM0Vs8jf1w/hqdefault.jpg",
-          source: "catalog",
-          provider: "YouTube · Official Music Video",
-          externalUrl: "https://www.youtube.com/watch?v=PEM0Vs8jf1w",
-          popularity: 334000000
-        }]
-      }, { headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" } });
-    }
     const [audius, archive] = await Promise.allSettled([searchAudius(raw), searchArchive(raw)]);
     const audiusResults = audius.status === "fulfilled" ? audius.value : [];
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
