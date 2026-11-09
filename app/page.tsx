@@ -10,7 +10,7 @@ type Tab = "home"|"search"|"library";
 
 export default function HomePage() {
   const [tab,setTab]=useState<Tab>("home"), [user,setUser]=useState<any>(null);
-  const [email,setEmail]=useState(""), [showAuth,setShowAuth]=useState(false), [sent,setSent]=useState(false);
+  const [username,setUsername]=useState(""), [password,setPassword]=useState(""), [authMode,setAuthMode]=useState<"login"|"signup">("login"), [showAuth,setShowAuth]=useState(false);
   const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]), [activePlaylistId,setActivePlaylistId]=useState(""), [playlistTrackIds,setPlaylistTrackIds]=useState<string[]>([]);
   const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState("");
   const [playing,setPlaying]=useState(""), [isPlaying,setIsPlaying]=useState(false);
@@ -65,10 +65,19 @@ export default function HomePage() {
 
   async function signIn(e:React.FormEvent){
     e.preventDefault(); if(!supabase)return;
+    const clean=username.trim().toLowerCase();
+    if(!/^[a-z0-9_]{3,20}$/.test(clean)){setMessage("Username must be 3–20 characters using letters, numbers or underscores.");return;}
+    if(password.length<8){setMessage("Password must be at least 8 characters.");return;}
     setBusy(true);setMessage("");
-    const {error}=await supabase.auth.signInWithOtp({email:email.trim(),options:{emailRedirectTo:process.env.NEXT_PUBLIC_SITE_URL || window.location.origin,shouldCreateUser:true}});
+    const email=clean+"@users.spotified.invalid";
+    if(authMode==="signup"){
+      const {data,error}=await supabase.functions.invoke("username-signup",{body:{username:clean,password}});
+      if(error||data?.error){setBusy(false);setMessage(data?.error??error?.message??"Could not create account.");return;}
+    }
+    const {error}=await supabase.auth.signInWithPassword({email,password});
     setBusy(false);
-    if(error)setMessage(error.message);else{setSent(true);setMessage("Email sent. Open the newest link in this same browser.");}
+    if(error)setMessage(authMode==="signup"?"Account created, but sign-in failed. Try signing in.":error.message);
+    else setMessage("Signed in.");
   }
   async function upload(file?:File){
     if(!file||!supabase||!user)return;
@@ -141,9 +150,11 @@ export default function HomePage() {
       <button className="account-button" aria-label={user?"Sign out":"Sign in"} onClick={()=>user?void supabase?.auth.signOut():setShowAuth(v=>!v)}>{user?<LogOut size={20}/>:<LogIn size={20}/>}</button>
     </header>
     <section className="page-content">
-      {showAuth?<section className="auth-panel"><button className="text-button" onClick={()=>setShowAuth(false)}>‹ Back</button><div className="auth-icon"><Music2 size={25}/></div><p className="overline">EMAIL ACCOUNT</p><h2>{sent?"Check your inbox":"Sign in to Spotified"}</h2>
-        {sent?<><p>We sent a sign-in link to <b>{email}</b>. Open the newest email in the same browser where you requested it. If it expired, request a fresh one.</p><button className="action-button" onClick={()=>setSent(false)}>Use another email</button></>:<><p>Save your music, playlists and uploads to your private library.</p><form onSubmit={signIn}><label htmlFor="email">Email address</label><input id="email" type="email" inputMode="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)} required/><button className="action-button" disabled={busy}>{busy?<LoaderCircle className="spin"/>:"Continue with email"}</button></form></>}
-        {message&&<p className="status-message">{message}</p>}<small>No Google sign-in. Email only.</small>
+      {showAuth?<section className="auth-panel"><button className="text-button" onClick={()=>setShowAuth(false)}>‹ Back</button><div className="auth-icon"><Music2 size={25}/></div><p className="overline">SPOTIFIED ACCOUNT</p><h2>{authMode==="login"?"Welcome back":"Create your account"}</h2>
+        <p>{authMode==="login"?"Sign in with your username and password.":"Choose a username and password to save your music and playlists."}</p>
+        <form onSubmit={signIn}><label htmlFor="username">Username</label><input id="username" type="text" autoCapitalize="none" autoCorrect="off" autoComplete="username" placeholder="your_username" value={username} onChange={e=>setUsername(e.target.value)} minLength={3} maxLength={20} required/><label htmlFor="password">Password</label><input id="password" type="password" autoComplete={authMode==="login"?"current-password":"new-password"} placeholder="At least 8 characters" value={password} onChange={e=>setPassword(e.target.value)} minLength={8} required/><button className="action-button" disabled={busy}>{busy?<LoaderCircle className="spin"/>:authMode==="login"?"Sign in":"Create account"}</button></form>
+        <button className="text-button" onClick={()=>{setAuthMode(authMode==="login"?"signup":"login");setMessage("");}}>{authMode==="login"?"New here? Create an account":"Already have an account? Sign in"}</button>
+        {message&&<p className="status-message">{message}</p>}<small>No email verification or Google sign-in required.</small>
       </section>:tab==="home"?<>
         {!user&&<section className="welcome"><div><p className="overline">YOUR PERSONAL MUSIC LIBRARY</p><h2>Your music starts here.</h2><p>Sign in to upload tracks, save favorites and create playlists.</p></div><button className="action-button" onClick={()=>setShowAuth(true)}>Sign in</button></section>}
         <section className="section"><div className="section-title"><h2>Recently added</h2><button className="text-button" onClick={()=>changeTab("library")}>See all</button></div>
