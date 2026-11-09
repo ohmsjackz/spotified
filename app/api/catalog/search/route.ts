@@ -37,7 +37,8 @@ async function searchAudius(query: string) {
     .map((track: any) => ({
       id: "audius-" + track.id,
       title: text(track.title) || "Untitled track",
-      artist: text(track.user?.name) || text(track.artist_name) || "Unknown artist",
+      // Prefer an explicit credited artist field over the uploader account name.
+      artist: text(track.artist_name) || text(track.user?.name) || "Unknown artist",
       url: "https://api.audius.co/v1/tracks/" + encodeURIComponent(track.id) + "/stream?app_name=Spotified",
       artwork: artworkUrl(track.artwork),
       source: "catalog",
