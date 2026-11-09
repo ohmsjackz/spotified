@@ -1,186 +1,172 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AudioLines, House, Search, Library, Plus, Play, Pause, UploadCloud,
-  LogIn, LogOut, Music2, Sparkles, ChevronRight, X, Check, LoaderCircle
-} from "lucide-react";
+import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Track = { id: string; title: string; url: string; storagePath?: string; createdAt?: string };
-type Tab = "home" | "search" | "library";
+type Track = { id:string; title:string; url:string; storagePath:string };
+type Playlist = { id:string; name:string };
+type Tab = "home"|"search"|"library";
 
-export default function Home() {
-  const [tab, setTab] = useState<Tab>("home");
-  const [email, setEmail] = useState("");
-  const [user, setUser] = useState<any>(null);
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [query, setQuery] = useState("");
-  const [playing, setPlaying] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [showSignIn, setShowSignIn] = useState(false);
-  const [sent, setSent] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+export default function HomePage() {
+  const [tab,setTab]=useState<Tab>("home"), [user,setUser]=useState<any>(null);
+  const [email,setEmail]=useState(""), [showAuth,setShowAuth]=useState(false), [sent,setSent]=useState(false);
+  const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]);
+  const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState("");
+  const [playing,setPlaying]=useState(""), [isPlaying,setIsPlaying]=useState(false);
+  const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);
+  const [shuffle,setShuffle]=useState(false), [repeat,setRepeat]=useState(false);
+  const [busy,setBusy]=useState(false), [message,setMessage]=useState("");
+  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null);
 
-  const loadTracks = useCallback(async (uid: string) => {
-    if (!supabase) return;
-    const { data, error } = await supabase.from("uploaded_tracks")
-      .select("id,title,storage_path,created_at").eq("user_id", uid).order("created_at", { ascending: false });
-    if (error) { setMessage(error.message); return; }
-    const restored = await Promise.all((data ?? []).map(async (row: any) => {
-      const { data: signed } = await supabase!.storage.from("user-audio").createSignedUrl(row.storage_path, 3600);
-      return signed?.signedUrl ? { id: row.id, title: row.title, url: signed.signedUrl, storagePath: row.storage_path, createdAt: row.created_at } : null;
+  const load = useCallback(async (uid:string) => {
+    if(!supabase) return;
+    const [a,b,c]=await Promise.all([
+      supabase.from("uploaded_tracks").select("id,title,storage_path").eq("user_id",uid).order("created_at",{ascending:false}),
+      supabase.from("user_playlists").select("id,name").eq("user_id",uid).order("created_at",{ascending:false}),
+      supabase.from("saved_tracks").select("track_id").eq("user_id",uid)
+    ]);
+    if(a.error){setMessage(a.error.message);return;}
+    const rows=await Promise.all((a.data??[]).map(async (r:any)=>{
+      const {data}=await supabase!.storage.from("user-audio").createSignedUrl(r.storage_path,3600);
+      return data?.signedUrl?{id:r.id,title:r.title,url:data.signedUrl,storagePath:r.storage_path}:null;
     }));
-    setTracks(restored.filter(Boolean) as Track[]);
-  }, []);
+    setTracks(rows.filter(Boolean) as Track[]);
+    setPlaylists((b.data??[]) as Playlist[]);
+    setLiked((c.data??[]).map((x:any)=>x.track_id));
+  },[]);
 
-  useEffect(() => {
-    if (!supabase) return;
-    let alive = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!alive) return;
-      const current = data.session?.user ?? null;
-      setUser(current);
-      if (current) void loadTracks(current.id);
+  useEffect(()=>{
+    if(!supabase)return;
+    let alive=true;
+    const finish=async()=>{
+      const u=new URL(window.location.href), code=u.searchParams.get("code");
+      if(code){
+        const {error}=await supabase!.auth.exchangeCodeForSession(code);
+        u.searchParams.delete("code"); window.history.replaceState({},document.title,u.pathname+u.search+u.hash);
+        if(error)setMessage("Email verification failed. Request a new link and open it in the same browser.");
+      }
+    };
+    void finish();
+    supabase.auth.getSession().then(({data,error})=>{
+      if(!alive)return;
+      if(error)setMessage(error.message);
+      const current=data.session?.user??null;setUser(current);if(current)void load(current.id);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const current = session?.user ?? null;
-      setUser(current);
-      if (current) void loadTracks(current.id);
-      else { setTracks([]); setPlaying(""); }
-      if (session) { setShowSignIn(false); setSent(false); setMessage("You're signed in."); }
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
+      const current=session?.user??null;setUser(current);
+      if(current)void load(current.id);else{setTracks([]);setPlaylists([]);setLiked([]);setPlaying("");}
+      if(event==="SIGNED_IN"&&session){setShowAuth(false);setSent(false);setMessage("Signed in.");}
     });
-    return () => { alive = false; subscription.unsubscribe(); };
-  }, [loadTracks]);
+    return()=>{alive=false;subscription.unsubscribe();};
+  },[load]);
 
-  async function sendMagicLink() {
-    if (!supabase) { setMessage("Sign-in is temporarily unavailable. Please try again later."); return; }
-    const clean = email.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) { setMessage("Enter a valid email address."); return; }
-    setBusy(true); setMessage("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: clean,
-      options: { emailRedirectTo: window.location.origin, shouldCreateUser: true }
-    });
+  async function signIn(e:React.FormEvent){
+    e.preventDefault(); if(!supabase)return;
+    setBusy(true);setMessage("");
+    const {error}=await supabase.auth.signInWithOtp({email:email.trim(),options:{emailRedirectTo:window.location.origin,shouldCreateUser:true}});
     setBusy(false);
-    if (error) { setMessage(error.message); return; }
-    setSent(true);
-    setMessage("Sign-in link sent. Open the email on this device, then return here.");
+    if(error)setMessage(error.message);else{setSent(true);setMessage("Email sent. Open the newest link in this same browser.");}
+  }
+  async function upload(file?:File){
+    if(!file||!supabase||!user)return;
+    if(!file.type.startsWith("audio/")){setMessage("Choose an audio file.");return;}
+    if(file.size>50*1024*1024){setMessage("Maximum file size is 50 MB.");return;}
+    setBusy(true);
+    const path=user.id+"/"+Date.now()+"-"+file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+    const up=await supabase.storage.from("user-audio").upload(path,file);
+    if(up.error){setBusy(false);setMessage(up.error.message);return;}
+    const row=await supabase.from("uploaded_tracks").insert({user_id:user.id,storage_path:path,title:file.name.replace(/\.[^.]+$/,"")}).select("id,title,storage_path").single();
+    if(row.error){setBusy(false);setMessage(row.error.message);return;}
+    const signed=await supabase.storage.from("user-audio").createSignedUrl(path,3600);
+    if(signed.error||!signed.data?.signedUrl){setBusy(false);setMessage("Uploaded, but playback URL failed. Refresh the library.");return;}
+    setTracks(v=>[{id:row.data.id,title:row.data.title,url:signed.data.signedUrl,storagePath:path},...v]);
+    setBusy(false);setMessage("Added to your library.");if(picker.current)picker.current.value="";
+  }
+  async function play(t:Track){
+    if(!audio.current)return;
+    if(playing===t.id){
+      if(audio.current.paused){try{await audio.current.play();}catch{setMessage("Playback failed.");}}
+      else audio.current.pause();
+      return;
+    }
+    audio.current.src=t.url;audio.current.load();
+    try{await audio.current.play();setPlaying(t.id);setCurrentTime(0);}catch{setMessage("This audio format cannot be played in Safari.");}
+  }
+  async function like(t:Track){
+    if(!supabase||!user){setShowAuth(true);return;}
+    if(liked.includes(t.id)){
+      const {error}=await supabase.from("saved_tracks").delete().eq("user_id",user.id).eq("track_id",t.id);
+      if(error)setMessage(error.message);else setLiked(v=>v.filter(x=>x!==t.id));
+    }else{
+      const {error}=await supabase.from("saved_tracks").insert({user_id:user.id,track_id:t.id,track_data:{title:t.title}});
+      if(error)setMessage(error.message);else setLiked(v=>[...v,t.id]);
+    }
+  }
+  async function createPlaylist(){
+    if(!supabase||!user){setShowAuth(true);return;}
+    const name=window.prompt("Playlist name");if(!name?.trim())return;
+    const {data,error}=await supabase.from("user_playlists").insert({user_id:user.id,name:name.trim()}).select("id,name").single();
+    if(error)setMessage(error.message);else{setPlaylists(v=>[data as Playlist,...v]);setMessage("Playlist created.");}
+  }
+  const current=tracks.find(t=>t.id===playing);
+  const filtered=useMemo(()=>tracks.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())),[tracks,query]);
+  const likedTracks=tracks.filter(t=>liked.includes(t.id));
+  function changeTab(t:Tab){setTab(t);setShowAuth(false);}
+  function skip(dir:number){
+    if(!tracks.length)return;
+    const i=tracks.findIndex(t=>t.id===playing), n=(i+dir+tracks.length)%tracks.length;
+    void play(tracks[n]);
   }
 
-  async function uploadAudio(file?: File) {
-    if (!file || !supabase || !user) return;
-    if (!file.type.startsWith("audio/")) { setMessage("Choose an audio file."); return; }
-    if (file.size > 50 * 1024 * 1024) { setMessage("Files must be 50 MB or smaller."); return; }
-    setBusy(true); setMessage("");
-    const path = user.id + "/" + Date.now() + "-" + file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const { error: uploadError } = await supabase.storage.from("user-audio").upload(path, file);
-    if (uploadError) { setBusy(false); setMessage(uploadError.message); return; }
-    const { data: row, error: rowError } = await supabase.from("uploaded_tracks")
-      .insert({ user_id: user.id, storage_path: path, title: file.name.replace(/\.[^.]+$/, "") })
-      .select("id,title,storage_path,created_at").single();
-    if (rowError) { setBusy(false); setMessage(rowError.message); return; }
-    const { data: signed } = await supabase.storage.from("user-audio").createSignedUrl(path, 3600);
-    if (signed?.signedUrl) setTracks(current => [{ id: row.id, title: row.title, url: signed.signedUrl, storagePath: path, createdAt: row.created_at }, ...current]);
-    setBusy(false); setMessage("Added to your library.");
-    if (fileRef.current) fileRef.current.value = "";
-  }
-
-  function playTrack(track: Track) {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (playing === track.id) { audio.pause(); setPlaying(""); return; }
-    audio.src = track.url;
-    void audio.play().then(() => setPlaying(track.id)).catch(() => setMessage("Couldn't play this file. Try uploading it again."));
-  }
-
-  async function signOut() {
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    setMessage("Signed out.");
-  }
-
-  const filtered = useMemo(() => tracks.filter(t => t.title.toLowerCase().includes(query.toLowerCase())), [tracks, query]);
-  const currentTrack = tracks.find(t => t.id === playing);
-
-  return (
-    <main className="app-shell">
-      <aside className="sidebar glass">
-        <a className="brand" href="#" onClick={e => { e.preventDefault(); setTab("home"); }}>
-          <span className="brand-mark"><AudioLines size={22}/></span><span>spotified</span>
-        </a>
-        <div className="nav-label">MENU</div>
-        <nav className="side-nav">
-          <button className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}><House/><span>Home</span></button>
-          <button className={tab === "search" ? "active" : ""} onClick={() => setTab("search")}><Search/><span>Search</span></button>
-          <button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}><Library/><span>Your Library</span></button>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="sidebar-note"><Sparkles size={16}/><span>Your sound, your space.</span></div>
-          {user ? <button className="account-button" onClick={signOut}><LogOut size={17}/> Sign out</button> : <button className="account-button" onClick={() => setShowSignIn(true)}><LogIn size={17}/> Sign in</button>}
-        </div>
-      </aside>
-
-      <section className="content-area">
-        <header className="topbar">
-          <div className="topbar-greeting"><span className="eyebrow">YOUR PERSONAL MUSIC SPACE</span><strong>{user ? "Welcome back" : "Made for your moments"}</strong></div>
-          <div className="top-actions">
-            {user ? <div className="user-pill"><span className="online-dot"/>{user.email}</div> : <button className="button button-soft" onClick={() => setShowSignIn(true)}><LogIn size={16}/> Sign in</button>}
-          </div>
-        </header>
-
-        {tab === "home" && <div className="page-view">
-          <section className="welcome-card">
-            <div className="welcome-orb orb-one"/><div className="welcome-orb orb-two"/>
-            <div className="welcome-copy"><span className="eyebrow">A LITTLE MORE YOU</span><h1>Every day has<br/><em>its own rhythm.</em></h1><p>Bring your own music into one calm, personal library.</p>
-              <div className="welcome-actions"><button className="button button-primary" onClick={() => user ? fileRef.current?.click() : setShowSignIn(true)}>{user ? <><Plus size={17}/> Add music</> : <><LogIn size={17}/> Get started</>}</button><button className="button button-glass" onClick={() => setTab("search")}><Search size={17}/> Explore library</button></div>
-            </div><div className="hero-art"><div className="vinyl"><div className="vinyl-center"><AudioLines size={30}/></div></div><div className="floating-chip"><Sparkles size={15}/> your soundtrack</div></div>
-          </section>
-          <section className="section-block">
-            <div className="section-heading"><div><span className="eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2>Recently added</h2></div><button className="text-action" onClick={() => setTab("library")}>See all <ChevronRight size={16}/></button></div>
-            {!user ? <div className="empty-card"><div className="empty-icon"><Music2 size={25}/></div><div><h3>Your library is waiting</h3><p>Sign in to save and play audio you own or have permission to use.</p></div><button className="button button-soft" onClick={() => setShowSignIn(true)}>Sign in with email</button></div> : tracks.length === 0 ? <div className="empty-card"><div className="empty-icon"><UploadCloud size={25}/></div><div><h3>Start with a track of your own</h3><p>Upload an audio file up to 50 MB. It will be saved to your private library.</p></div><button className="button button-soft" onClick={() => fileRef.current?.click()}>Upload audio</button></div> : <TrackList tracks={tracks.slice(0,4)} playing={playing} onPlay={playTrack}/>}
-          </section>
-        </div>}
-
-        {tab === "search" && <div className="page-view">
-          <div className="page-title"><span className="eyebrow">FIND YOUR SOUND</span><h1>Search</h1><p>Find a track in your personal library.</p></div>
-          <div className="search-box glass"><Search size={20}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search your tracks..." autoComplete="off"/>{query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={17}/></button>}</div>
-          {user ? <><div className="section-heading search-results-heading"><h2>{query ? "Results" : "Your music"}</h2><span className="result-count">{filtered.length} {filtered.length === 1 ? "track" : "tracks"}</span></div>{filtered.length ? <TrackList tracks={filtered} playing={playing} onPlay={playTrack}/> : <div className="empty-card"><div className="empty-icon"><Search size={24}/></div><div><h3>No tracks found</h3><p>Try another title or upload something new.</p></div></div>}</> : <div className="empty-card"><div className="empty-icon"><LogIn size={24}/></div><div><h3>Sign in to search your music</h3><p>Your private library appears here after you sign in.</p></div><button className="button button-soft" onClick={() => setShowSignIn(true)}>Sign in</button></div>}
-        </div>}
-
-        {tab === "library" && <div className="page-view">
-          <div className="page-title library-title"><div><span className="eyebrow">ALL YOUR FAVORITES</span><h1>Your Library</h1><p>{user ? tracks.length + (tracks.length === 1 ? " track" : " tracks") : "A home for your music."}</p></div>{user && <button className="button button-primary" onClick={() => fileRef.current?.click()}><Plus size={17}/> Add music</button>}</div>
-          {!user ? <div className="empty-card"><div className="empty-icon"><Library size={24}/></div><div><h3>Your music, together</h3><p>Sign in with your email to access your private library.</p></div><button className="button button-soft" onClick={() => setShowSignIn(true)}>Sign in</button></div> : tracks.length ? <TrackList tracks={tracks} playing={playing} onPlay={playTrack}/> : <div className="empty-card"><div className="empty-icon"><Music2 size={24}/></div><div><h3>Nothing here just yet</h3><p>Add your first audio file and it will show up here.</p></div><button className="button button-soft" onClick={() => fileRef.current?.click()}>Upload audio</button></div>}
-        </div>}
-
-        <input ref={fileRef} className="hidden-input" type="file" accept="audio/*" onChange={e => void uploadAudio(e.target.files?.[0])}/>
-        {message && <div className="toast" role="status"><span>{message}</span><button onClick={() => setMessage("")} aria-label="Dismiss"><X size={15}/></button></div>}
-      </section>
-
-      <nav className="mobile-nav glass" aria-label="Main navigation">
-        <button className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}><House/><span>Home</span></button>
-        <button className={tab === "search" ? "active" : ""} onClick={() => setTab("search")}><Search/><span>Search</span></button>
-        <button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}><Library/><span>Library</span></button>
-      </nav>
-
-      {currentTrack && <div className="mini-player glass"><div className="mini-cover"><AudioLines size={19}/></div><div className="mini-meta"><strong>{currentTrack.title}</strong><span>Playing from your library</span></div><button className="play-button" onClick={() => playTrack(currentTrack)} aria-label="Pause"><Pause size={19}/></button></div>}
-      <audio ref={audioRef} onEnded={() => setPlaying("")} onPause={() => {}} className="audio-element"/>
-
-      {showSignIn && <div className="modal-backdrop" onClick={() => setShowSignIn(false)}>
-        <section className="signin-modal glass" role="dialog" aria-modal="true" aria-labelledby="signin-title" onClick={e => e.stopPropagation()}>
-          <button className="modal-close" onClick={() => {setShowSignIn(false);setSent(false);}} aria-label="Close"><X size={19}/></button>
-          <div className="modal-logo"><AudioLines size={25}/></div>
-          {!sent ? <><span className="eyebrow">WELCOME TO SPOTIFIED</span><h2 id="signin-title">Your music.<br/><em>Your space.</em></h2><p>Enter your email and we’ll send you a secure sign-in link. No password or Google account needed.</p><form onSubmit={e => {e.preventDefault(); void sendMagicLink();}}><label htmlFor="email">Email address</label><input id="email" type="email" inputMode="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} required/><button className="button button-primary modal-submit" disabled={busy}>{busy ? <><LoaderCircle className="spin" size={17}/> Sending…</> : <>Continue with email <ChevronRight size={17}/></>}</button></form></> : <div className="sent-state"><div className="sent-icon"><Check size={25}/></div><span className="eyebrow">CHECK YOUR INBOX</span><h2>Link on its way.</h2><p>We sent a sign-in link to <strong>{email}</strong>. Open it in this browser to finish signing in.</p><button className="button button-soft modal-submit" onClick={() => {setSent(false);setMessage("");}}>Use a different email</button></div>}
-          {message && <div className="modal-message" role="status">{message}</div>}
-          <small className="privacy-note">By continuing, you agree to use only music you own or are licensed to play.</small>
+  return <main className="app-shell">
+    <header className="app-header"><div><p className="overline">{tab==="home"?"LISTEN NOW":tab==="search"?"FIND MUSIC":"YOUR COLLECTION"}</p><h1>{tab==="home"?"Home":tab==="search"?"Search":"Your Library"}</h1></div>
+      <button className="account-button" aria-label={user?"Sign out":"Sign in"} onClick={()=>user?void supabase?.auth.signOut():setShowAuth(v=>!v)}>{user?<LogOut size={20}/>:<LogIn size={20}/>}</button>
+    </header>
+    <section className="page-content">
+      {showAuth?<section className="auth-panel"><button className="text-button" onClick={()=>setShowAuth(false)}>‹ Back</button><div className="auth-icon"><Music2 size={25}/></div><p className="overline">EMAIL ACCOUNT</p><h2>{sent?"Check your inbox":"Sign in to Spotified"}</h2>
+        {sent?<><p>We sent a sign-in link to <b>{email}</b>. Open the newest email in the same browser where you requested it. If it expired, request a fresh one.</p><button className="action-button" onClick={()=>setSent(false)}>Use another email</button></>:<><p>Save your music, playlists and uploads to your private library.</p><form onSubmit={signIn}><label htmlFor="email">Email address</label><input id="email" type="email" inputMode="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)} required/><button className="action-button" disabled={busy}>{busy?<LoaderCircle className="spin"/>:"Continue with email"}</button></form></>}
+        {message&&<p className="status-message">{message}</p>}<small>No Google sign-in. Email only.</small>
+      </section>:tab==="home"?<>
+        {!user&&<section className="welcome"><div><p className="overline">YOUR PERSONAL MUSIC LIBRARY</p><h2>Your music starts here.</h2><p>Sign in to upload tracks, save favorites and create playlists.</p></div><button className="action-button" onClick={()=>setShowAuth(true)}>Sign in</button></section>}
+        <section className="section"><div className="section-title"><h2>Recently added</h2><button className="text-button" onClick={()=>changeTab("library")}>See all</button></div>
+          {tracks.length?<TrackList tracks={tracks.slice(0,10)} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><Music2 size={26}/><p>{user?"Your library is empty. Add music you own to get started.":"Your music will appear here after you sign in."}</p>{user&&<button className="secondary-button" onClick={()=>picker.current?.click()}><Upload size={16}/> Add music</button>}</div>}
         </section>
-      </div>}
-    </main>
-  );
+        {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like}/></section>}
+      </>:tab==="search"?<>
+        <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
+        <section className="section"><div className="section-title"><h2>{query?"Results":"Your music"}</h2><span>{filtered.length} tracks</span></div>
+          {filtered.length?<TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>{user?"No matching tracks in your library.":"Sign in to search your music."}</p>{!user&&<button className="secondary-button" onClick={()=>setShowAuth(true)}>Sign in</button>}</div>}
+        </section>
+      </>:<>
+        <div className="library-actions"><button className="secondary-button" onClick={createPlaylist}><Plus size={17}/> Create playlist</button><button className="secondary-button" disabled={!user} onClick={()=>picker.current?.click()}><Upload size={17}/> Add music</button></div>
+        {playlists.length>0&&<section className="section"><h2 className="subheading">Playlists</h2>{playlists.map(p=><div className="playlist-row" key={p.id}><span className="playlist-icon"><ListMusic size={19}/></span><b>{p.name}</b></div>)}</section>}
+        <section className="section"><h2 className="subheading">Liked Songs</h2>{likedTracks.length?<TrackList tracks={likedTracks} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>Tracks you like will appear here.</p></div>}</section>
+        <section className="section"><h2 className="subheading">Your uploads</h2>{tracks.length?<TrackList tracks={tracks} playing={playing} liked={liked} onPlay={play} onLike={like}/>:<div className="empty"><p>No uploaded tracks yet.</p></div>}</section>
+        {!user&&<button className="action-button" onClick={()=>setShowAuth(true)}>Sign in</button>}
+      </>}
+    </section>
+    <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
+    {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
+    {current&&<section className="player">
+      <div className="mini-player"><div className="cover"><Music2 size={19}/></div><div className="track-meta"><b>{current.title}</b><span>Uploaded music</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
+      <div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
+      <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
+    </section>}
+    <nav className="tab-bar" aria-label="Main navigation">
+      <button className={tab==="home"?"active":""} onClick={()=>changeTab("home")}><Home size={22}/><span>Home</span></button>
+      <button className={tab==="search"?"active":""} onClick={()=>changeTab("search")}><Search size={22}/><span>Search</span></button>
+      <button className={tab==="library"?"active":""} onClick={()=>changeTab("library")}><Library size={22}/><span>Your Library</span></button>
+    </nav>
+    <audio ref={audio} preload="metadata" onLoadedMetadata={e=>setDuration(e.currentTarget.duration||0)} onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime)} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onEnded={()=>{
+      if(repeat&&audio.current){audio.current.currentTime=0;void audio.current.play();return;}
+      if(shuffle&&tracks.length>1){const list=tracks.filter(t=>t.id!==playing);const next=list[Math.floor(Math.random()*list.length)];if(next)void play(next);}
+      else skip(1);
+    }}/>
+  </main>;
 }
 
-function TrackList({ tracks, playing, onPlay }: { tracks: Track[]; playing: string; onPlay: (track: Track) => void }) {
-  return <div className="track-list">{tracks.map((track, index) => <div className="track-row" key={track.id}><span className="track-index">{String(index + 1).padStart(2, "0")}</span><div className="track-art"><Music2 size={18}/></div><div className="track-info"><strong>{track.title}</strong><span>Personal library</span></div><button className="track-play" onClick={() => onPlay(track)} aria-label={playing === track.id ? "Pause " + track.title : "Play " + track.title}>{playing === track.id ? <Pause size={18}/> : <Play size={18}/>}</button></div>)}</div>;
+function TrackList({tracks,playing,liked,onPlay,onLike}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void}){
+  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>Uploaded music</span></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
 }
+function time(v:number){if(!Number.isFinite(v)||v<0)return "0:00";return Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");}
