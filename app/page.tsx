@@ -264,7 +264,7 @@ export default function HomePage() {
         {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></section>}
       </>:tab==="search"?<>
         {!query&&<div className="browse-chips"><button onClick={()=>setQuery("pop")}>Pop</button><button onClick={()=>setQuery("chill")}>Chill</button><button onClick={()=>setQuery("indie")}>Indie</button><button onClick={()=>setQuery("electronic")}>Electronic</button></div>}
-        {!query&&<div className="browse-chips"><button onClick={()=>setQuery("pop")}>Pop</button><button onClick={()=>setQuery("chill")}>Chill</button><button onClick={()=>setQuery("indie")}>Indie</button><button onClick={()=>setQuery("electronic")}>Electronic</button></div>}
+        
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
         <section className="section"><div className="section-title"><h2>{query?"Search results":"Browse all"}</h2><span>{searching?"Searching…":catalog.length+" tracks"}</span></div>
           {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No matches yet. Try the song title and artist together, like “golden hour JVKE”.":"Search songs or artists. Find full-length open tracks and official 30-second previews from Apple’s catalogue."}</p></div>}
