@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog" };
+type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string };
 type Playlist = { id:string; name:string };
 type Tab = "home"|"search"|"library";
 
@@ -110,7 +110,7 @@ export default function HomePage() {
       const {error}=await supabase.from("saved_tracks").delete().eq("user_id",user.id).eq("track_id",t.id);
       if(error)setMessage(error.message);else setLiked(v=>v.filter(x=>x!==t.id));
     }else{
-      const {error}=await supabase.from("saved_tracks").insert({user_id:user.id,track_id:t.id,track_data:{title:t.title,artist:t.artist,preview_url:t.source==="catalog"?t.url:undefined,artwork:t.artwork,source:t.source}});
+      const {error}=await supabase.from("saved_tracks").insert({user_id:user.id,track_id:t.id,track_data:{title:t.title,artist:t.artist,artwork:t.artwork,source:t.source}});
       if(error)setMessage(error.message);else setLiked(v=>[...v,t.id]);
     }
   }
@@ -143,13 +143,17 @@ export default function HomePage() {
     const timer=window.setTimeout(async()=>{
       setSearching(true);
       try{
-        const res=await fetch("https://itunes.apple.com/search?"+new URLSearchParams({term,media:"music",entity:"song",limit:"25"}),{signal:controller.signal});
-        if(!res.ok)throw new Error("Music search is temporarily unavailable.");
+        const res=await fetch("/api/catalog/search?q="+encodeURIComponent(term),{signal:controller.signal});
         const data=await res.json();
-        setCatalog((data.results??[]).filter((x:any)=>x.previewUrl).map((x:any)=>({id:"apple-"+x.trackId,title:x.trackName,artist:x.artistName,url:x.previewUrl,artwork:x.artworkUrl100,source:"catalog" as const})));
+        if(!res.ok)throw new Error(data.error??"Music search is temporarily unavailable.");
+        setCatalog((data.results??[]).map((x:any)=>({
+          id:x.id,title:x.title,artist:x.artist,url:x.url,artwork:x.artwork,
+          source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl
+        })));
+        if(!(data.results??[]).length)setMessage("No full-length tracks with a verified free-use license were found. Try another search.");
       }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}
       finally{if(!controller.signal.aborted)setSearching(false);}
-    },350);
+    },450);
     return()=>{window.clearTimeout(timer);controller.abort();};
   },[query]);
 
@@ -181,8 +185,8 @@ export default function HomePage() {
         {likedTracks.length>0&&<section className="section"><div className="section-title"><h2>Liked Songs</h2></div><TrackList tracks={likedTracks.slice(0,5)} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></section>}
       </>:tab==="search"?<>
         <div className="search-field"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="What do you want to play?"/>{query&&<button onClick={()=>setQuery("")} aria-label="Clear"><X size={17}/></button>}</div>
-        <section className="section"><div className="section-title"><h2>{query?"Search results":"Explore music"}</h2><span>{searching?"Searching…":catalog.length+" songs"}</span></div>
-          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No playable previews found. Try another search.":"Search for songs, artists or albums. Available previews can be played here."}</p></div>}
+        <section className="section"><div className="section-title"><h2>{query?"Search results":"Find music"}</h2><span>{searching?"Searching…":catalog.length+" tracks"}</span></div>
+          {catalog.length?<TrackList tracks={catalog} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/>:<div className="empty"><p>{searching?"Searching the music catalogue…":query.length>1?"No playable previews found. Try another search.":"Search songs, artists or albums. Play full-length tracks from openly licensed music collections—no upload needed."}</p></div>}
           {query&&filtered.length>0&&<><h3 className="subheading">Your uploads</h3><TrackList tracks={filtered} playing={playing} liked={liked} onPlay={play} onLike={like} onAdd={addToPlaylist}/></>}
         </section>
       </>:<>
@@ -196,7 +200,7 @@ export default function HomePage() {
     <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
     {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
     {current&&<section className="player">
-      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?"Apple Music preview":"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
+      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?"Full track · Internet Archive":"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
       <div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
       <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
     </section>}
@@ -214,6 +218,6 @@ export default function HomePage() {
 }
 
 function TrackList({tracks,playing,liked,onPlay,onLike,onAdd}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void;onAdd:(t:Track)=>void}){
-  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{t.artist??(t.source==="catalog"?"30-second preview":"Your upload")}</span></button><button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
+  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{t.artist??(t.source==="catalog"?"Full track · Internet Archive":"Your upload")}</span></button><button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
 }
 function time(v:number){if(!Number.isFinite(v)||v<0)return "0:00";return Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");}
