@@ -195,13 +195,23 @@ export default function HomePage() {
     setDuration(0);
     try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Storage may be unavailable. */}
     if(t.videoId){
+      if(offlineObjectUrl.current){URL.revokeObjectURL(offlineObjectUrl.current);offlineObjectUrl.current=null;}
       setYoutubeVideoId(t.videoId);
       setIsPlaying(true);
       return;
     }
     setYoutubeVideoId("");
     if(!audio.current)return;
-    audio.current.src=t.url;
+    let playbackUrl=t.url;
+    try{
+      const savedBlob=await readOfflineBlob(t.id);
+      if(savedBlob){
+        if(offlineObjectUrl.current)URL.revokeObjectURL(offlineObjectUrl.current);
+        offlineObjectUrl.current=URL.createObjectURL(savedBlob);
+        playbackUrl=offlineObjectUrl.current;
+      }
+    }catch{/* Fall back to the online source. */}
+    audio.current.src=playbackUrl;
     audio.current.load();
     try{await audio.current.play();}
     catch{setIsPlaying(false);setMessage("This stream could not start in Safari. Try another result or open its source page.");}
