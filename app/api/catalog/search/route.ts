@@ -24,7 +24,7 @@ function artworkUrl(value: any): string | undefined {
 }
 
 async function searchAudius(query: string) {
-  const params = new URLSearchParams({ query, limit: "50", sort_method: "popular", sort_direction: "desc" });
+  const params = new URLSearchParams({ query, limit: "50", sort_method: "popular" });
   const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
     headers: { "User-Agent": "Spotified/1.0 (music discovery)" },
     signal: AbortSignal.timeout(10000),
@@ -42,7 +42,7 @@ async function searchAudius(query: string) {
       artwork: artworkUrl(track.artwork),
       source: "catalog",
       provider: "Audius",
-      popularity: Number(track.play_count || 0),
+      popularity: Number(track.play_count ?? track.playCount ?? 0),
       externalUrl: track.permalink || ("https://audius.co/" + (track.user?.handle || "") + "/" + (track.slug || track.id))
     }));
 }
@@ -121,7 +121,7 @@ export async function GET(request: NextRequest) {
       const artistHits = words.filter(word => artist.includes(word)).length;
       const allTermsMatch = words.every(word => title.includes(word) || artist.includes(word));
       const relevance = (allTermsMatch ? 20 : 0) + titleHits * 3 + artistHits * 5 + (title === normalized ? 8 : 0);
-      const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 2;
+      const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
       const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
       return { track, score: relevance + popularity + fullTrackBonus };
     }).sort((a, b) => b.score - a.score);
