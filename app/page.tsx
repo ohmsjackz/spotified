@@ -42,14 +42,49 @@ export default function HomePage() {
   const [tab,setTab]=useState<Tab>("home"), [user,setUser]=useState<any>(null);
   const [username,setUsername]=useState(""), [password,setPassword]=useState(""), [authMode,setAuthMode]=useState<"login"|"signup">("login"), [showAuth,setShowAuth]=useState(false);
   const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]), [activePlaylistId,setActivePlaylistId]=useState(""), [playlistTrackIds,setPlaylistTrackIds]=useState<string[]>([]);
+  const [offlineTracks,setOfflineTracks]=useState<Track[]>([]), [offlineIds,setOfflineIds]=useState<string[]>([]), [downloading,setDownloading]=useState<string[]>([]);
   const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState(""), [catalog,setCatalog]=useState<Track[]>([]), [searching,setSearching]=useState(false);
   const [playing,setPlaying]=useState(""), [activeTrack,setActiveTrack]=useState<Track|null>(null), [isPlaying,setIsPlaying]=useState(false);
   const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);
   const [lyrics,setLyrics]=useState<string[]>([]), [lyricsOpen,setLyricsOpen]=useState(false), [lyricsLoading,setLyricsLoading]=useState(false), [lyricsMessage,setLyricsMessage]=useState("");
   const [shuffle,setShuffle]=useState(false), [repeat,setRepeat]=useState(false);
   const [busy,setBusy]=useState(false), [message,setMessage]=useState("");
-  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null), youtubeFrame=useRef<HTMLIFrameElement>(null);
+  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null), youtubeFrame=useRef<HTMLIFrameElement>(null), offlineObjectUrl=useRef<string|null>(null);
   const [youtubeVideoId,setYoutubeVideoId]=useState("");
+
+  useEffect(()=>{
+    if("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(()=>{});
+    readOfflineRecords().then(records=>{
+      setOfflineTracks(records.map(record=>record.track));
+      setOfflineIds(records.map(record=>record.id));
+    }).catch(()=>{});
+    return ()=>{if(offlineObjectUrl.current)URL.revokeObjectURL(offlineObjectUrl.current);};
+  },[]);
+
+  async function toggleOffline(t:Track){
+    if(offlineIds.includes(t.id)){
+      try{await deleteOfflineRecord(t.id);setOfflineIds(v=>v.filter(id=>id!==t.id));setOfflineTracks(v=>v.filter(item=>item.id!==t.id));setMessage("Removed from offline downloads.");}
+      catch{setMessage("Couldn't remove this offline file.");}
+      return;
+    }
+    if(t.videoId || (t.source!=="upload" && !(t.downloadable&&t.downloadUrl))){
+      setMessage("This source doesn't permit offline downloads. YouTube tracks can only play online here.");return;
+    }
+    setDownloading(v=>[...v,t.id]);setMessage("");
+    try{
+      const response=await fetch(t.source==="upload"?t.url:(t.downloadUrl||t.url),{mode:"cors"});
+      if(!response.ok)throw new Error("The audio provider refused the download.");
+      const blob=await response.blob();
+      if(!blob.size)throw new Error("The provider returned an empty audio file.");
+      if(blob.type && !blob.type.startsWith("audio/") && blob.type!=="application/octet-stream")throw new Error("The provider did not return an audio file.");
+      const savedTrack={...t,url:"",downloadUrl:undefined};
+      await saveOfflineRecord({id:t.id,track:savedTrack,blob,savedAt:Date.now()});
+      setOfflineIds(v=>v.includes(t.id)?v:[...v,t.id]);
+      setOfflineTracks(v=>v.some(item=>item.id===t.id)?v:[savedTrack,...v]);
+      setMessage("Saved for offline listening.");
+    }catch(error:any){setMessage(error?.message||"Offline download failed. This provider may block saving in Safari.");}
+    finally{setDownloading(v=>v.filter(id=>id!==t.id));}
+  }
 
   useEffect(()=>{
     try{
