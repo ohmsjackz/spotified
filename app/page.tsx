@@ -120,6 +120,7 @@ export default function HomePage() {
     audio.current.src=t.url;
     audio.current.load();
     setPlaying(t.id);
+    try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Storage may be unavailable. */}
     setCurrentTime(0);
     setDuration(0);
     try{await audio.current.play();}
