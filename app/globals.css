@@ -5,7 +5,7 @@ body{min-height:100svh}
 button,input{font:inherit}
 button{color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
 button:focus-visible,input:focus-visible{outline:2px solid var(--green);outline-offset:3px}
-.app-shell{min-height:100svh;max-width:430px;margin:0 auto;padding:env(safe-area-inset-top) 0 calc(var(--tab-height) + env(safe-area-inset-bottom) + 20px)}
+.app-shell{min-height:100svh;max-width:430px;margin:0 auto;padding:env(safe-area-inset-top) 0 calc(var(--tab-height) + env(safe-area-inset-bottom) + 20px)}\n.app-shell:has(.player){padding-bottom:calc(var(--tab-height) + env(safe-area-inset-bottom) + 170px)}
 .app-header{height:68px;padding:8px 20px 10px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:5;background:rgba(18,18,18,.94);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .header-copy{min-width:0}.overline{margin:0 0 4px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:1.3px}.app-header h1{margin:0;font-size:23px;line-height:1.1;font-weight:750;letter-spacing:-.45px}
 .account-button{width:44px;height:44px;border:0;border-radius:50%;background:var(--surface2);display:grid;place-items:center}
