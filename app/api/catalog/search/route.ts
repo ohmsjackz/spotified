@@ -76,7 +76,7 @@ async function searchArchive(raw: string) {
       const itemLicense = text(metadata.metadata?.licenseurl) || text(doc.licenseurl);
       if (!allowedLicense(itemLicense)) return null;
       const files: ArchiveFile[] = metadata.files ?? [];
-      const audioFiles = files.filter(file => file.name && file.private !== "true" && file.source !== "metadata" && /\.(mp3|m4a|mp4|wav)$/i.test(file.name));
+      const audioFiles = files.filter(file => file.name && file.private !== "true" && file.source !== "metadata" && /\.(mp3|m4a|wav|flac|ogg|opus)$/i.test(file.name));
       audioFiles.sort((a, b) => {
         const score = (file: ArchiveFile) => {
           const name = (file.name ?? "").toLowerCase(), format = (file.format ?? "").toLowerCase();
@@ -109,13 +109,16 @@ export async function GET(request: NextRequest) {
   if (raw.length < 2) return NextResponse.json({ results: [] });
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
   try {
-    const normalizedQuery = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
+    const requestedVariant = /\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute)\b/i.test(raw);
     const [audius, archive] = await Promise.allSettled([searchAudius(raw), searchArchive(raw)]);
     const audiusResults = audius.status === "fulfilled" ? audius.value : [];
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
     const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
     const words = normalized.split(/\s+/).filter(Boolean);
-    const ranked = [...audiusResults, ...archiveResults].map((track: any) => {
+    const ranked = [...audiusResults, ...archiveResults].filter((track: any) => {
+      if (requestedVariant) return true;
+      return !/\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute|rework|edit)\b/i.test(String(track.title || ""));
+    }).map((track: any) => {
       const title = String(track.title || "").toLowerCase();
       const artist = String(track.artist || "").toLowerCase();
       const titleHits = words.filter(word => title.includes(word)).length;
@@ -123,8 +126,9 @@ export async function GET(request: NextRequest) {
       const allTermsMatch = words.every(word => title.includes(word) || artist.includes(word));
       const relevance = (allTermsMatch ? 20 : 0) + titleHits * 3 + artistHits * 5 + (title === normalized ? 8 : 0);
       const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
+      const exactArtistBoost = words.some(word => word.length > 2 && artist.includes(word)) ? 12 : 0;
       const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
-      return { track, score: relevance + popularity + fullTrackBonus };
+      return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
     if (!results.length && audius.status === "rejected" && archive.status === "rejected") {
