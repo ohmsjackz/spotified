@@ -33,7 +33,7 @@ async function searchAudius(query: string) {
   if (!response.ok) throw new Error("Audius search unavailable");
   const payload = await response.json();
   const rows = Array.isArray(payload.data) ? payload.data : [];
-  return rows.filter((track: any) => track?.id && !track.is_stream_gated && !track.is_scheduled_release)
+  return rows.filter((track: any) => track?.id && track.is_streamable !== false && !track.is_stream_gated && !track.is_scheduled_release && Number(track.duration || 0) >= 60)
     .map((track: any) => ({
       id: "audius-" + track.id,
       title: text(track.title) || "Untitled track",
