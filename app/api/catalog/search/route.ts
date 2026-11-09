@@ -141,9 +141,11 @@ export async function GET(request: NextRequest) {
     const ranked = [...audiusResults, ...appleResults, ...archiveResults].map((track: any) => {
       const title = String(track.title || "").toLowerCase();
       const artist = String(track.artist || "").toLowerCase();
-      const titleMatch = normalized.split(/\\s+/).every(word => title.includes(word));
-      const exactArtist = normalized.split(/\\s+/).some(word => artist.includes(word));
-      return { track, score: (titleMatch ? 5 : 0) + (exactArtist ? 4 : 0) + (title === normalized ? 3 : 0) };
+      const words = normalized.split(/\s+/).filter(Boolean);
+      const titleHits = words.filter(word => title.includes(word)).length;
+      const artistHits = words.filter(word => artist.includes(word)).length;
+      const allTermsMatch = words.every(word => title.includes(word) || artist.includes(word));
+      return { track, score: (allTermsMatch ? 10 : 0) + titleHits * 2 + artistHits * 4 + (title === normalized ? 3 : 0) };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
     if (!results.length && audius.status === "rejected" && archive.status === "rejected" && apple.status === "rejected") {
