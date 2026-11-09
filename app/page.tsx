@@ -135,7 +135,22 @@ export default function HomePage() {
     if(error){setMessage(error.message);return;}
     setPlaylistTrackIds((data??[]).map((x:any)=>x.track_id));setActivePlaylistId(p.id);
   }
-  useEffect(()=>{\n    const term=query.trim();\n    if(term.length<2){setCatalog([]);setSearching(false);return;}\n    const controller=new AbortController();\n    const timer=window.setTimeout(async()=>{\n      setSearching(true);\n      try{\n        const res=await fetch("https://itunes.apple.com/search?"+new URLSearchParams({term,media:"music",entity:"song",limit:"25"}),{signal:controller.signal});\n        if(!res.ok)throw new Error("Music search is temporarily unavailable.");\n        const data=await res.json();\n        setCatalog((data.results??[]).filter((x:any)=>x.previewUrl).map((x:any)=>({id:"apple-"+x.trackId,title:x.trackName,artist:x.artistName,url:x.previewUrl,artwork:x.artworkUrl100,source:"catalog" as const})));\n      }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}\n      finally{if(!controller.signal.aborted)setSearching(false);}\n    },350);\n    return()=>{window.clearTimeout(timer);controller.abort();};\n  },[query]);\n\n  const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
+  useEffect(()=>{
+    const term=query.trim();
+    if(term.length<2){setCatalog([]);setSearching(false);return;}
+    const controller=new AbortController();
+    const timer=window.setTimeout(async()=>{
+      setSearching(true);
+      try{
+        const res=await fetch("https://itunes.apple.com/search?"+new URLSearchParams({term,media:"music",entity:"song",limit:"25"}),{signal:controller.signal});
+        if(!res.ok)throw new Error("Music search is temporarily unavailable.");
+        const data=await res.json();
+        setCatalog((data.results??[]).filter((x:any)=>x.previewUrl).map((x:any)=>({id:"apple-"+x.trackId,title:x.trackName,artist:x.artistName,url:x.previewUrl,artwork:x.artworkUrl100,source:"catalog" as const})));
+      }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}
+      finally{if(!controller.signal.aborted)setSearching(false);}
+    },350);
+    return()=>{window.clearTimeout(timer);controller.abort();};
+  },[query]);\n\n  const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
   const filtered=useMemo(()=>tracks.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())),[tracks,query]);
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
   function changeTab(t:Tab){setTab(t);setShowAuth(false);}
