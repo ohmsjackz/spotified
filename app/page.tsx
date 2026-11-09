@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle, ExternalLink, Download } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Track = { id:string; title:string; url:string;  storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string; provider?:string; externalUrl?:string; downloadable?:boolean; downloadUrl?:string };
+type Track = { id:string; title:string; url:string; videoId?:string; durationText?:string; playback?:"youtube-embed"; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string; provider?:string; externalUrl?:string; downloadable?:boolean; downloadUrl?:string };
 type Playlist = { id:string; name:string };
 type Tab = "home"|"search"|"library";
 
@@ -18,7 +18,8 @@ export default function HomePage() {
   const [lyrics,setLyrics]=useState<string[]>([]), [lyricsOpen,setLyricsOpen]=useState(false), [lyricsLoading,setLyricsLoading]=useState(false), [lyricsMessage,setLyricsMessage]=useState("");
   const [shuffle,setShuffle]=useState(false), [repeat,setRepeat]=useState(false);
   const [busy,setBusy]=useState(false), [message,setMessage]=useState("");
-  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null);
+  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null), youtubeFrame=useRef<HTMLIFrameElement>(null);
+  const [youtubeVideoId,setYoutubeVideoId]=useState("");
 
   useEffect(()=>{
     try{
@@ -111,21 +112,34 @@ export default function HomePage() {
   }
   async function play(t:Track){
     setActiveTrack(t);
-    if(!audio.current)return;
     if(playing===t.id){
-      if(audio.current.paused){try{await audio.current.play();}catch{setMessage("Safari or Chrome could not start this stream. Try opening the audio directly.");}}
+      if(t.videoId){
+        const nextPlaying=!isPlaying;
+        youtubeFrame.current?.contentWindow?.postMessage(JSON.stringify({event:"command",func:nextPlaying?"playVideo":"pauseVideo",args:[]}),"https://www.youtube.com");
+        setIsPlaying(nextPlaying);
+        return;
+      }
+      if(!audio.current)return;
+      if(audio.current.paused){try{await audio.current.play();}catch{setMessage("This audio stream could not start in Safari. Try another result.");}}
       else audio.current.pause();
       return;
     }
-    audio.current.pause();
-    audio.current.src=t.url;
-    audio.current.load();
+    audio.current?.pause();
     setPlaying(t.id);
-    try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Storage may be unavailable. */}
     setCurrentTime(0);
     setDuration(0);
+    try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Storage may be unavailable. */}
+    if(t.videoId){
+      setYoutubeVideoId(t.videoId);
+      setIsPlaying(true);
+      return;
+    }
+    setYoutubeVideoId("");
+    if(!audio.current)return;
+    audio.current.src=t.url;
+    audio.current.load();
     try{await audio.current.play();}
-    catch{setIsPlaying(false);setMessage("This stream could not start in this browser. Use Open audio to test the source directly.");}
+    catch{setIsPlaying(false);setMessage("This stream could not start in Safari. Try another result or open its source page.");}
   }
   async function like(t:Track){
     if(!supabase||!user){setShowAuth(true);return;}
@@ -166,14 +180,31 @@ export default function HomePage() {
     const timer=window.setTimeout(async()=>{
       setSearching(true);
       try{
-        const res=await fetch("/api/catalog/search?q="+encodeURIComponent(term),{signal:controller.signal});
-        const data=await res.json();
-        if(!res.ok)throw new Error(data.error??"Music search is temporarily unavailable.");
-        setCatalog((data.results??[]).map((x:any)=>({
-          id:x.id,title:x.title,artist:x.artist,url:x.url,artwork:x.artwork,
-          source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl,provider:x.provider,externalUrl:x.externalUrl,downloadable:x.downloadable,downloadUrl:x.downloadUrl
-        })));
-        if(!(data.results??[]).length)setMessage("No matches found. Try the song title and artist together.");
+        const [openTuneResponse,licensedResponse]=await Promise.allSettled([
+          fetch("/api/opentune?q="+encodeURIComponent(term),{signal:controller.signal}),
+          fetch("/api/catalog/search?q="+encodeURIComponent(term),{signal:controller.signal})
+        ]);
+        let openTuneTracks:Track[]=[];
+        let licensedTracks:Track[]=[];
+        if(openTuneResponse.status==="fulfilled"&&openTuneResponse.value.ok){
+          const data=await openTuneResponse.value.json();
+          openTuneTracks=(data.results??[]).map((x:any)=>({
+            id:x.id,title:x.title,artist:x.artist,url:x.url,videoId:x.videoId,durationText:x.durationText,
+            artwork:x.artwork,source:"catalog" as const,provider:"OpenTune · YouTube Music",
+            externalUrl:x.externalUrl||x.url,playback:"youtube-embed" as const,downloadable:false
+          }));
+        }
+        if(licensedResponse.status==="fulfilled"&&licensedResponse.value.ok){
+          const data=await licensedResponse.value.json();
+          licensedTracks=(data.results??[]).map((x:any)=>({
+            id:x.id,title:x.title,artist:x.artist,url:x.url,artwork:x.artwork,
+            source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl,provider:x.provider,externalUrl:x.externalUrl,downloadable:x.downloadable,downloadUrl:x.downloadUrl
+          }));
+        }
+        const unique=new Map<string,Track>();
+        [...openTuneTracks,...licensedTracks].forEach(track=>{const key=(track.title+"|"+(track.artist||"")).toLowerCase();if(!unique.has(key))unique.set(key,track);});
+        setCatalog([...unique.values()]);
+        if(!unique.size)setMessage("No matches found. Try the song title and artist together.");
       }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}
       finally{if(!controller.signal.aborted)setSearching(false);}
     },450);
@@ -289,8 +320,9 @@ export default function HomePage() {
     <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
     {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
     {current&&<section className="player">
+      {current.videoId&&youtubeVideoId===current.videoId&&<div className="youtube-embed"><iframe ref={youtubeFrame} src={"https://www.youtube.com/embed/"+encodeURIComponent(current.videoId)+"?autoplay=1&playsinline=1&enablejsapi=1&rel=0"} title={"Play "+current.title} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen /></div>}
       <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?(current.provider||"Music catalogue"):"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void loadLyrics()} aria-label="Show lyrics"><span className="lyrics-icon">LYRICS</span></button><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
-      <div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
+      {!current.videoId&&<div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>}
       <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
     </section>}
     {lyricsOpen&&<div className="lyrics-overlay" role="dialog" aria-modal="true" aria-label="Lyrics"><div className="lyrics-sheet"><div className="lyrics-head"><div><p className="overline">NOW PLAYING</p><h2>{current?.title||"Lyrics"}</h2><span>{current?.artist}</span></div><button onClick={()=>setLyricsOpen(false)} aria-label="Close lyrics"><X size={22}/></button></div>{lyricsLoading?<div className="lyrics-empty">Finding lyrics…</div>:lyrics.length?<div className="lyrics-lines">{lyrics.map((line,i)=><p key={i}>{line}</p>)}</div>:<div className="lyrics-empty">{lyricsMessage||"Lyrics aren't available for this track yet."}</div>}<small>Lyrics provided by LRCLIB where available.</small></div></div>}
@@ -299,7 +331,7 @@ export default function HomePage() {
       <button className={tab==="search"?"active":""} onClick={()=>changeTab("search")}><Search size={22}/><span>Search</span></button>
       <button className={tab==="library"?"active":""} onClick={()=>changeTab("library")}><Library size={22}/><span>Your Library</span></button>
     </nav>
-    <audio ref={audio} preload="metadata" playsInline onLoadedMetadata={e=>{const d=Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0;setDuration(d);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);if(item.track?.id===playing&&Number(item.position)>0&&Number(item.position)<d)e.currentTarget.currentTime=Number(item.position);}}catch{/* Ignore saved playback errors. */}}} onTimeUpdate={e=>{const position=e.currentTarget.currentTime;setCurrentTime(position);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);sessionStorage.setItem("spotified-playback",JSON.stringify({...item,position}));}}catch{/* Ignore storage errors. */}}} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onError={()=>{if(playing)setMessage("The audio host rejected this file or the format is unsupported. Try another result or Open audio in Safari/Chrome.");setIsPlaying(false);}} onEnded={()=>{
+    <audio ref={audio} preload="metadata" playsInline onLoadedMetadata={e=>{const d=Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0;setDuration(d);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);if(item.track?.id===playing&&Number(item.position)>0&&Number(item.position)<d)e.currentTarget.currentTime=Number(item.position);}}catch{/* Ignore saved playback errors. */}}} onTimeUpdate={e=>{const position=e.currentTarget.currentTime;setCurrentTime(position);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);sessionStorage.setItem("spotified-playback",JSON.stringify({...item,position}));}}catch{/* Ignore storage errors. */}}} onPlay={()=>{if(!current?.videoId)setIsPlaying(true)}} onPause={()=>{if(!current?.videoId)setIsPlaying(false)}} onError={()=>{if(playing)setMessage("The audio host rejected this file or the format is unsupported. Try another result or Open audio in Safari/Chrome.");setIsPlaying(false);}} onEnded={()=>{
       if(repeat&&audio.current){audio.current.currentTime=0;void audio.current.play();return;}
       skip(1);
     }}/>
