@@ -164,6 +164,44 @@ export default function HomePage() {
   },[query]);
 
   const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
+
+  // Publish the active track to the browser/OS Now Playing surface (Lock Screen and supported Dynamic Island UI).
+  useEffect(()=>{
+    if(!current || !("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
+    const session=navigator.mediaSession;
+    session.metadata=new MediaMetadata({
+      title:current.title,
+      artist:current.artist || (current.source==="catalog"?"Unknown artist":"Your music"),
+      album:"Spotified",
+      artwork:current.artwork?[{src:current.artwork,sizes:"512x512",type:"image/jpeg"}]:[]
+    });
+    return ()=>{ session.metadata=null; };
+  },[current?.id,current?.title,current?.artist,current?.artwork,current?.source]);
+
+  useEffect(()=>{
+    if(!("mediaSession" in navigator)) return;
+    const session=navigator.mediaSession;
+    session.playbackState=isPlaying?"playing":playing?"paused":"none";
+    const setHandler=(action:MediaSessionAction,handler:((details?:MediaSessionActionDetails)=>void)|null)=>{
+      try{session.setActionHandler(action,handler);}catch{/* Unsupported action on this browser. */}
+    };
+    setHandler("play",()=>{if(audio.current?.paused)void audio.current.play();});
+    setHandler("pause",()=>audio.current?.pause());
+    setHandler("previoustrack",()=>skip(-1));
+    setHandler("nexttrack",()=>skip(1));
+    setHandler("seekto",details=>{
+      if(audio.current && details?.seekTime!==undefined && Number.isFinite(details.seekTime)){
+        audio.current.currentTime=details.seekTime;
+        setCurrentTime(details.seekTime);
+      }
+    });
+    if(duration>0){
+      try{session.setPositionState({duration,playbackRate:audio.current?.playbackRate||1,position:Math.min(currentTime,duration)});}catch{/* Position state is optional. */}
+    }
+    return ()=>{
+      setHandler("play",null);setHandler("pause",null);setHandler("previoustrack",null);setHandler("nexttrack",null);setHandler("seekto",null);
+    };
+  },[isPlaying,playing,duration,currentTime,tracks,catalog,shuffle,repeat]);
   const filtered=useMemo(()=>tracks.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())),[tracks,query]);
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
   function changeTab(t:Tab){setTab(t);setShowAuth(false);}
