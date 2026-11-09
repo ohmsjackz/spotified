@@ -90,7 +90,7 @@ async function searchAudius(query: string) {
 }
 
 async function searchArchive(raw: string) {
-  const safeTerms = raw.toLowerCase().match(/[\\p{L}\\p{N}]{2,}/gu)?.slice(0,8) ?? [];
+  const safeTerms = raw.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu)?.slice(0,8) ?? [];
   if (!safeTerms.length) return [];
   const termClauses = safeTerms.flatMap(term => [`title:${term}`, `creator:${term}`, `subject:${term}`]);
   const licenseClause = ["licenseurl:*publicdomain*", "licenseurl:*creativecommons.org/licenses/by/4.0*", "licenseurl:*creativecommons.org/licenses/by-sa/4.0*"].join(" OR ");
@@ -167,7 +167,7 @@ export async function GET(request: NextRequest) {
     const openverseFailed = openverseBatch.every(result => result.status === "rejected");
     const audiusFailed = audiusBatch.every(result => result.status === "rejected");
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
-    const normalized = raw.toLowerCase().replace(/[^\\p{L}\\p{N} ]/gu, " ").trim();
+    const normalized = raw.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, " ").trim();
     const words = normalized.split(/\s+/).filter(Boolean);
 
     // A small, explicit canonical catalogue prevents unrelated same-title uploads
@@ -182,7 +182,7 @@ export async function GET(request: NextRequest) {
       const title = String(track.title || "").trim();
       const artist = String(track.artist || "").trim();
       const searchableMetadata = title + " " + String(track.tags || "");
-      const variantOrSlop = /\\b(remix|cover|karaoke|nightcore|slowed|speed.?up|sped.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version|8d audio|bass boosted|reverb|chipmunk|pitch.?shift|acapella|demo version|fan.?made|type beat|reaction|lyrics video|official music video|visualizer|music video|full album|compilation)\\b/i;
+      const variantOrSlop = /\b(remix|cover|karaoke|nightcore|slowed|speed.?up|sped.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version|8d audio|bass boosted|reverb|chipmunk|pitch.?shift|acapella|demo version|fan.?made|type beat|reaction|lyrics video|official music video|visualizer|music video|full album|compilation)\b/i;
       if (!title || !artist || artist.toLowerCase() === "unknown artist") return false;
       if (track.provider === "Audius" && track.remixOf) return false;
       if (variantOrSlop.test(searchableMetadata)) return false;
