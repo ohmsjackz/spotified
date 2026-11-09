@@ -172,7 +172,7 @@ export default function HomePage() {
     if(row.error){setBusy(false);setMessage(row.error.message);return;}
     const signed=await supabase.storage.from("user-audio").createSignedUrl(path,3600);
     if(signed.error||!signed.data?.signedUrl){setBusy(false);setMessage("Uploaded, but playback URL failed. Refresh the library.");return;}
-    setTracks(v=>[{id:row.data.id,title:row.data.title,url:signed.data.signedUrl,storagePath:path},...v]);
+    setTracks(v=>[{id:row.data.id,title:row.data.title,url:signed.data.signedUrl,storagePath:path,source:"upload"},...v]);
     setBusy(false);setMessage("Added to your library.");if(picker.current)picker.current.value="";
   }
   async function play(t:Track){
