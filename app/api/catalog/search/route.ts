@@ -46,6 +46,31 @@ async function searchAudius(query: string) {
     }));
 }
 
+
+async function searchApple(query: string) {
+  const params = new URLSearchParams({ term: query, entity: "song", limit: "20", country: "us" });
+  const response = await fetch("https://itunes.apple.com/search?" + params.toString(), {
+    headers: { "User-Agent": "Spotified/1.0 (music discovery)" },
+    signal: AbortSignal.timeout(10000),
+    next: { revalidate: 300 }
+  });
+  if (!response.ok) throw new Error("Apple preview search unavailable");
+  const payload = await response.json();
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  return rows.filter((track: any) => track?.trackId && track.previewUrl)
+    .map((track: any) => ({
+      id: "apple-" + track.trackId,
+      title: text(track.trackName) || "Untitled track",
+      artist: text(track.artistName) || "Unknown artist",
+      url: track.previewUrl,
+      artwork: typeof track.artworkUrl100 === "string" ? track.artworkUrl100.replace("100x100bb", "600x600bb") : undefined,
+      source: "catalog",
+      provider: "Apple preview",
+      preview: true,
+      externalUrl: track.trackViewUrl
+    }));
+}
+
 async function searchArchive(raw: string) {
   const safeTerms = raw.toLowerCase().match(/[a-z0-9]{2,}/g)?.slice(0,8) ?? [];
   if (!safeTerms.length) return [];
@@ -108,16 +133,25 @@ export async function GET(request: NextRequest) {
   if (raw.length < 2) return NextResponse.json({ results: [] });
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
   try {
-    const [audius, archive] = await Promise.allSettled([searchAudius(raw), searchArchive(raw)]);
+    const [audius, archive, apple] = await Promise.allSettled([searchAudius(raw), searchArchive(raw), searchApple(raw)]);
     const audiusResults = audius.status === "fulfilled" ? audius.value : [];
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
-    const results = [...audiusResults, ...archiveResults].slice(0, 45);
-    if (!results.length && audius.status === "rejected" && archive.status === "rejected") {
+    const appleResults = apple.status === "fulfilled" ? apple.value : [];
+    const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
+    const ranked = [...audiusResults, ...appleResults, ...archiveResults].map((track: any) => {
+      const title = String(track.title || "").toLowerCase();
+      const artist = String(track.artist || "").toLowerCase();
+      const titleMatch = normalized.split(/\\s+/).every(word => title.includes(word));
+      const exactArtist = normalized.split(/\\s+/).some(word => artist.includes(word));
+      return { track, score: (titleMatch ? 5 : 0) + (exactArtist ? 4 : 0) + (title === normalized ? 3 : 0) };
+    }).sort((a, b) => b.score - a.score);
+    const results = ranked.slice(0, 50).map(item => item.track);
+    if (!results.length && audius.status === "rejected" && archive.status === "rejected" && apple.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
       results,
-      sources: { audius: audiusResults.length, internetArchive: archiveResults.length }
+      sources: { audius: audiusResults.length, internetArchive: archiveResults.length, applePreviews: appleResults.length }
     }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
   } catch {
     return NextResponse.json({ error: "Music search failed. Please try again." }, { status: 502 });
