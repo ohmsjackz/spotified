@@ -13,12 +13,12 @@ export default function HomePage() {
   const [username,setUsername]=useState(""), [password,setPassword]=useState(""), [authMode,setAuthMode]=useState<"login"|"signup">("login"), [showAuth,setShowAuth]=useState(false);
   const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]), [activePlaylistId,setActivePlaylistId]=useState(""), [playlistTrackIds,setPlaylistTrackIds]=useState<string[]>([]);
   const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState(""), [catalog,setCatalog]=useState<Track[]>([]), [searching,setSearching]=useState(false);
-  const [playing,setPlaying]=useState(""), [isPlaying,setIsPlaying]=useState(false);
+  const [playing,setPlaying]=useState(""), [activeTrack,setActiveTrack]=useState<Track|null>(null), [isPlaying,setIsPlaying]=useState(false);
   const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);
   const [lyrics,setLyrics]=useState<string[]>([]), [lyricsOpen,setLyricsOpen]=useState(false), [lyricsLoading,setLyricsLoading]=useState(false), [lyricsMessage,setLyricsMessage]=useState("");
   const [shuffle,setShuffle]=useState(false), [repeat,setRepeat]=useState(false);
   const [busy,setBusy]=useState(false), [message,setMessage]=useState("");
-  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null);
+  const audio=useRef<HTMLAudioElement>(null), picker=useRef<HTMLInputElement>(null), lastYoutubeEnded=useRef("");
 
   useEffect(()=>{
     try{
@@ -28,7 +28,7 @@ export default function HomePage() {
       if(!item?.track?.id||(!item.track.url&&!item.track.youtubeId))return;
       if(item.track.source==="catalog")setCatalog(v=>v.some(t=>t.id===item.track.id)?v:[item.track,...v]);
       else setTracks(v=>v.some(t=>t.id===item.track.id)?v:[item.track,...v]);
-      setPlaying(item.track.id);
+      setPlaying(item.track.id);setActiveTrack(item.track);
       setCurrentTime(Number(item.position)||0);
       if(audio.current && item.track.url){audio.current.src=item.track.url;audio.current.load();}
     }catch{/* Ignore invalid saved playback state. */}
@@ -110,13 +110,15 @@ export default function HomePage() {
     setBusy(false);setMessage("Added to your library.");if(picker.current)picker.current.value="";
   }
   async function play(t:Track){
+    setActiveTrack(t);
     if(t.youtubeId){
+      audio.current?.pause();
       if(playing===t.id){
         const command=isPlaying?"pauseVideo":"playVideo";
         document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:command,args:[]}),"*");
         setIsPlaying(!isPlaying);
       }else{
-        setPlaying(t.id);setCurrentTime(0);setDuration(209);setIsPlaying(true);
+        setPlaying(t.id);setCurrentTime(0);setDuration(0);setIsPlaying(true);lastYoutubeEnded.current="";
         try{sessionStorage.setItem("spotified-playback",JSON.stringify({track:t,position:0}));}catch{/* Ignore storage errors. */}
       }
       return;
@@ -190,7 +192,7 @@ export default function HomePage() {
     return()=>{window.clearTimeout(timer);controller.abort();};
   },[query]);
 
-  const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
+  const current=(activeTrack?.id===playing?activeTrack:null)||tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
 
   async function loadLyrics(){
     if(!current)return;
@@ -208,6 +210,30 @@ export default function HomePage() {
     }catch(error:any){setLyricsMessage(error.message||"Couldn't load lyrics.");}
     finally{setLyricsLoading(false);}
   }
+
+  useEffect(()=>{
+    if(!current?.youtubeId)return;
+    const receive=(event:MessageEvent)=>{
+      if(!event.origin.includes("youtube.com"))return;
+      let payload:any;
+      try{payload=typeof event.data==="string"?JSON.parse(event.data):event.data;}catch{return;}
+      if(payload?.event!=="infoDelivery"||!payload.info)return;
+      const info=payload.info;
+      if(Number.isFinite(info.currentTime))setCurrentTime(info.currentTime);
+      if(Number.isFinite(info.duration)&&info.duration>0)setDuration(info.duration);
+      if(info.playerState===1)setIsPlaying(true);
+      if(info.playerState===2||info.playerState===5)setIsPlaying(false);
+      if(info.playerState===0&&lastYoutubeEnded.current!==current.id){
+        lastYoutubeEnded.current=current.id;
+        if(repeat){
+          document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"seekTo",args:[0,true]}),"*");
+          document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"playVideo",args:[]}),"*");
+        }else skip(1);
+      }
+    };
+    window.addEventListener("message",receive);
+    return()=>window.removeEventListener("message",receive);
+  },[current?.id,current?.youtubeId,repeat]);
 
   // Publish the active track to the browser/OS Now Playing surface (Lock Screen and supported Dynamic Island UI).
   useEffect(()=>{
@@ -229,12 +255,13 @@ export default function HomePage() {
     const setHandler=(action:MediaSessionAction,handler:((details?:MediaSessionActionDetails)=>void)|null)=>{
       try{session.setActionHandler(action,handler);}catch{/* Unsupported action on this browser. */}
     };
-    setHandler("play",()=>{if(current?.youtubeId){document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"playVideo",args:[]}),"*");setIsPlaying(true);}else if(audio.current?.paused)void audio.current.play();});
-    setHandler("pause",()=>{if(current?.youtubeId){document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"pauseVideo",args:[]}),"*");setIsPlaying(false);}else audio.current?.pause();});
+    setHandler("play",()=>{if(current?.youtubeId){document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"playVideo",args:[]}),"*");}else if(audio.current?.paused)void audio.current.play();});
+    setHandler("pause",()=>{if(current?.youtubeId){document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"pauseVideo",args:[]}),"*");}else audio.current?.pause();});
     setHandler("previoustrack",()=>skip(-1));
     setHandler("nexttrack",()=>skip(1));
     setHandler("seekto",details=>{
-      if(audio.current && details?.seekTime!==undefined && Number.isFinite(details.seekTime)){
+      if(current?.youtubeId){document.querySelector<HTMLIFrameElement>(".youtube-embed")?.contentWindow?.postMessage(JSON.stringify({event:"command",func:"seekTo",args:[details?.seekTime||0,true]}),"*");}
+      else if(audio.current && details?.seekTime!==undefined && Number.isFinite(details.seekTime)){
         audio.current.currentTime=details.seekTime;
         setCurrentTime(details.seekTime);
       }
@@ -250,7 +277,7 @@ export default function HomePage() {
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
   function changeTab(t:Tab){setTab(t);setShowAuth(false);}
   function skip(dir:number){
-    const queue=[...tracks,...catalog];
+    const queue=Array.from(new Map([...tracks,...catalog,...(activeTrack?[activeTrack]:[])].map(t=>[t.id,t])).values());
     if(!queue.length)return;
     const i=queue.findIndex(t=>t.id===playing);
     const n=(Math.max(i,0)+dir+queue.length)%queue.length;
@@ -293,10 +320,12 @@ export default function HomePage() {
     </section>
     <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
     {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
-    {current&&<section className="player">
-      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?(current.provider||"Music catalogue"):"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void loadLyrics()} aria-label="Show lyrics"><span className="lyrics-icon">LYRICS</span></button>{current.youtubeId&&<button className="player-icon youtube-skip" onClick={()=>skip(-1)} aria-label="Previous track"><SkipBack size={17}/></button>}<button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button>{current.youtubeId&&<button className="player-icon youtube-skip" onClick={()=>skip(1)} aria-label="Next track"><SkipForward size={17}/></button>}<button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
-      {!current.youtubeId&&<><div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
-      <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div></>}</section>
+    {current&&<section className={"player"+(current.youtubeId?" player-youtube":"")}>
+      {current.youtubeId&&<div className="youtube-stage"><iframe key={current.id} className="youtube-embed" src={"https://www.youtube.com/embed/"+current.youtubeId+"?autoplay=1&playsinline=1&controls=1&rel=0&enablejsapi=1&origin="+encodeURIComponent(window.location.origin)} title={current.title+" by "+current.artist} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen onLoad={e=>{const target=e.currentTarget.contentWindow;if(target){target.postMessage(JSON.stringify({event:"listening",id:"spotified-player"}),"*");target.postMessage(JSON.stringify({event:"command",func:"playVideo",args:[]}),"*");}}}/></div>}
+      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?(current.provider||"Music catalogue"):"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void loadLyrics()} aria-label="Show lyrics"><span className="lyrics-icon">LYRICS</span></button><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
+      {!current.youtubeId&&<div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>}
+      <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
+    </section>}
     {lyricsOpen&&<div className="lyrics-overlay" role="dialog" aria-modal="true" aria-label="Lyrics"><div className="lyrics-sheet"><div className="lyrics-head"><div><p className="overline">NOW PLAYING</p><h2>{current?.title||"Lyrics"}</h2><span>{current?.artist}</span></div><button onClick={()=>setLyricsOpen(false)} aria-label="Close lyrics"><X size={22}/></button></div>{lyricsLoading?<div className="lyrics-empty">Finding lyrics…</div>:lyrics.length?<div className="lyrics-lines">{lyrics.map((line,i)=><p key={i}>{line}</p>)}</div>:<div className="lyrics-empty">{lyricsMessage||"Lyrics aren't available for this track yet."}</div>}<small>Lyrics provided by LRCLIB where available.</small></div></div>}
     <nav className="tab-bar" aria-label="Main navigation">
       <button className={tab==="home"?"active":""} onClick={()=>changeTab("home")}><Home size={22}/><span>Home</span></button>
