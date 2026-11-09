@@ -280,6 +280,11 @@ export default function HomePage() {
     const queue=Array.from(new Map([...tracks,...catalog,...(activeTrack?[activeTrack]:[])].map(t=>[t.id,t])).values());
     if(!queue.length)return;
     const i=queue.findIndex(t=>t.id===playing);
+    if(dir>0&&shuffle&&queue.length>1){
+      const choices=queue.filter(t=>t.id!==playing);
+      void play(choices[Math.floor(Math.random()*choices.length)]);
+      return;
+    }
     const n=(Math.max(i,0)+dir+queue.length)%queue.length;
     void play(queue[n]);
   }
@@ -334,8 +339,7 @@ export default function HomePage() {
     </nav>
     <audio ref={audio} preload="metadata" playsInline onLoadedMetadata={e=>{const d=Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0;setDuration(d);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);if(item.track?.id===playing&&Number(item.position)>0&&Number(item.position)<d)e.currentTarget.currentTime=Number(item.position);}}catch{/* Ignore saved playback errors. */}}} onTimeUpdate={e=>{const position=e.currentTarget.currentTime;setCurrentTime(position);try{const saved=sessionStorage.getItem("spotified-playback");if(saved){const item=JSON.parse(saved);sessionStorage.setItem("spotified-playback",JSON.stringify({...item,position}));}}catch{/* Ignore storage errors. */}}} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onError={()=>{if(playing)setMessage("The audio host rejected this file or the format is unsupported. Try another result or Open audio in Safari/Chrome.");setIsPlaying(false);}} onEnded={()=>{
       if(repeat&&audio.current){audio.current.currentTime=0;void audio.current.play();return;}
-      if(shuffle&&tracks.length+catalog.length>1){const list=[...tracks,...catalog].filter(t=>t.id!==playing);const next=list[Math.floor(Math.random()*list.length)];if(next)void play(next);}
-      else skip(1);
+      skip(1);
     }}/>
   </main>;
 }
