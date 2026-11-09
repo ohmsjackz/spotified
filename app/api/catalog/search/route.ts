@@ -83,6 +83,41 @@ async function searchJamendo(query: string) {
     }));
 }
 
+async function searchFreeToUse(query: string) {
+  const params = new URLSearchParams({ query, limit: "30", order: "plays", sort: "desc" });
+  const response = await fetch("https://api.freetouse.com/v3/music/tracks/search?" + params.toString(), {
+    headers: { "User-Agent": "Spotified/1.0 (free music discovery)" },
+    signal: AbortSignal.timeout(12000),
+    next: { revalidate: 300 }
+  });
+  if (!response.ok) throw new Error("Free To Use search unavailable");
+  const payload = await response.json();
+  const rows = Array.isArray(payload.data) ? payload.data : [];
+  return rows.filter((track: any) =>
+    track?.id && track.status === 1 && track.is_premium !== true &&
+    track.title && track.files?.mp3 && Number(track.duration || 0) >= 45
+  ).map((track: any) => {
+    const artists = Array.isArray(track.artists)
+      ? track.artists.map((entry: any) => text(entry?.[1]?.name)).filter(Boolean)
+      : [];
+    return {
+      id: "freetouse-" + track.id,
+      title: String(track.title).trim(),
+      artist: artists.join(", ") || "Unknown artist",
+      url: track.files.mp3,
+      artwork: track.thumbnails?.md || track.thumbnails?.lg || track.thumbnails?.xl || undefined,
+      duration: Number(track.duration) || undefined,
+      license: "Free To Use License",
+      externalUrl: "https://freetouse.com",
+      downloadUrl: track.files.mp3,
+      downloadable: true,
+      source: "catalog",
+      provider: "Free To Use",
+      popularity: Number(track.plays || track.views || 0)
+    };
+  }).filter((track: any) => track.artist !== "Unknown artist");
+}
+
 async function searchAudius(query: string) {
   const params = new URLSearchParams({ query, limit: "50", sort_method: "relevant" });
   const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
@@ -182,15 +217,17 @@ export async function GET(request: NextRequest) {
       raw.replace(/[“”‘’]/g, "").replace(/[()\[\]{}]/g, " ").replace(/\s+/g, " ").trim(),
       raw.split(/\s+/).filter(Boolean).join(" ")
     ])].filter(Boolean).slice(0, 3);
-    const [openverseBatch, audiusBatch, jamendoBatch, archive] = await Promise.all([
+    const [openverseBatch, audiusBatch, jamendoBatch, freeToUseBatch, archive] = await Promise.all([
       Promise.allSettled(searchTerms.map(term => searchOpenverse(term))),
       Promise.allSettled(searchTerms.map(term => searchAudius(term))),
       Promise.allSettled(searchTerms.map(term => searchJamendo(term))),
+      Promise.allSettled(searchTerms.map(term => searchFreeToUse(term))),
       searchArchive(raw).then(value => ({ status: "fulfilled" as const, value })).catch(error => ({ status: "rejected" as const, reason: error }))
     ]);
     const openverseResults = [...new Map(openverseBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const audiusResults = [...new Map(audiusBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const jamendoResults = [...new Map(jamendoBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
+    const freeToUseResults = [...new Map(freeToUseBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
     const openverseFailed = openverseBatch.every(result => result.status === "rejected");
     const audiusFailed = audiusBatch.every(result => result.status === "rejected");
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
@@ -204,7 +241,7 @@ export async function GET(request: NextRequest) {
       "golden hour": { title: "golden hour", artist: "JVKE", titleAliases: ["golden hour", "golden hour (official music video)"] }
     };
     const canonical = canonicalOverrides[normalized];
-    const candidates = [...openverseResults, ...audiusResults, ...jamendoResults, ...archiveResults].filter((track: any) => {
+    const candidates = [...openverseResults, ...audiusResults, ...jamendoResults, ...freeToUseResults, ...archiveResults].filter((track: any) => {
       if (requestedVariant) return true;
       const title = String(track.title || "").trim();
       const artist = String(track.artist || "").trim();
@@ -244,16 +281,16 @@ export async function GET(request: NextRequest) {
       const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
       const openLicenceBoost = track.provider === "Openverse" ? 10 : 0;
       const exactArtistBoost = words.some(word => word.length > 2 && artist.includes(word)) ? 12 : 0;
-      const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" || track.provider === "Jamendo" ? 3 : 0;
+      const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" || track.provider === "Jamendo" || track.provider === "Free To Use" ? 3 : 0;
       return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus + openLicenceBoost };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
-    if (!results.length && openverseFailed && audiusFailed && jamendoBatch.every(result => result.status === "rejected") && archive.status === "rejected") {
+    if (!results.length && openverseFailed && audiusFailed && jamendoBatch.every(result => result.status === "rejected") && freeToUseBatch.every(result => result.status === "rejected") && archive.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
       results,
-      sources: { openverse: openverseResults.length, audius: audiusResults.length, jamendo: jamendoResults.length, internetArchive: archiveResults.length }
+      sources: { openverse: openverseResults.length, audius: audiusResults.length, jamendo: jamendoResults.length, freeToUse: freeToUseResults.length, internetArchive: archiveResults.length }
     }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
   } catch {
     return NextResponse.json({ error: "Music search failed. Please try again." }, { status: 502 });
