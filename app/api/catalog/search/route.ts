@@ -24,7 +24,7 @@ function artworkUrl(value: any): string | undefined {
 }
 
 async function searchAudius(query: string) {
-  const params = new URLSearchParams({ query, limit: "50", sort_method: "popular" });
+  const params = new URLSearchParams({ query, limit: "50", sort_method: "relevant" });
   const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
     headers: { "User-Agent": "Spotified/1.0 (music discovery)" },
     signal: AbortSignal.timeout(10000),
@@ -33,14 +33,14 @@ async function searchAudius(query: string) {
   if (!response.ok) throw new Error("Audius search unavailable");
   const payload = await response.json();
   const rows = Array.isArray(payload.data) ? payload.data : [];
-  return rows.filter((track: any) => track?.id && track.is_streamable !== false && !track.is_stream_gated && !track.is_scheduled_release && Number(track.duration || 0) >= 60)
+  return rows.filter((track: any) => track?.id && track.is_streamable !== false && !track.is_stream_gated && !track.is_scheduled_release && Number(track.duration || 0) >= 45)
     .map((track: any) => ({
       id: "audius-" + track.id,
       title: text(track.title) || "Untitled track",
       // Never silently relabel an uploader as the credited performer.
       artist: (Array.isArray(track.artists) && track.artists.length
         ? track.artists.map((artist: any) => text(artist?.name)).filter(Boolean).join(", ")
-        : text(track.artist_name)) || "Unknown artist",
+        : text(track.artist_name) || text(track.user?.name)) || "Unknown artist",
       artistCreditVerified: Boolean((Array.isArray(track.artists) && track.artists.some((artist: any) => text(artist?.name))) || text(track.artist_name)),
       isrc: text(track.isrc) || undefined,
       remixOf: track.remix_of || null,
@@ -117,8 +117,17 @@ export async function GET(request: NextRequest) {
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
   try {
     const requestedVariant = /\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute)\b/i.test(raw);
-    const [audius, archive] = await Promise.allSettled([searchAudius(raw), searchArchive(raw)]);
-    const audiusResults = audius.status === "fulfilled" ? audius.value : [];
+    const searchTerms = [...new Set([
+      raw,
+      raw.replace(/[“”‘’]/g, "").replace(/[()\[\]{}]/g, " ").replace(/\s+/g, " ").trim(),
+      raw.split(/\s+/).filter(Boolean).join(" ")
+    ])].filter(Boolean).slice(0, 3);
+    const [audiusBatch, archive] = await Promise.all([
+      Promise.allSettled(searchTerms.map(term => searchAudius(term))),
+      searchArchive(raw)
+    ]);
+    const audiusResults = [...new Map(audiusBatch.flatMap(result => result.status === "fulfilled" ? result.value : []).map((track: any) => [track.id, track])).values()];
+    const audiusFailed = audiusBatch.every(result => result.status === "rejected");
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
     const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
     const words = normalized.split(/\s+/).filter(Boolean);
@@ -137,7 +146,7 @@ export async function GET(request: NextRequest) {
       const searchableMetadata = title + " " + String(track.tags || "");
       const variantOrSlop = /\\b(remix|cover|karaoke|nightcore|slowed|speed.?up|sped.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version|8d audio|bass boosted|reverb|chipmunk|pitch.?shift|acapella|demo version|fan.?made|type beat|reaction|lyrics video|official music video|visualizer|music video|full album|compilation)\\b/i;
       if (!title || !artist || artist.toLowerCase() === "unknown artist") return false;
-      if (track.provider === "Audius" && (!track.artistCreditVerified || track.remixOf)) return false;
+      if (track.provider === "Audius" && track.remixOf) return false;
       if (variantOrSlop.test(searchableMetadata)) return false;
       if (/^(untitled|unknown|track ?\\d+)$/i.test(title)) return false;
       if (title.length < 2 || artist.length < 2 || title.length > 180 || artist.length > 120) return false;
@@ -163,14 +172,16 @@ export async function GET(request: NextRequest) {
       const titleHits = words.filter(word => title.includes(word)).length;
       const artistHits = words.filter(word => artist.includes(word)).length;
       const allTermsMatch = words.every(word => title.includes(word) || artist.includes(word));
-      const relevance = (allTermsMatch ? 20 : 0) + titleHits * 3 + artistHits * 5 + (title === normalized ? 8 : 0);
+      const exactTitle = title === normalized ? 35 : 0;
+      const startsWithTitle = title.startsWith(normalized) ? 15 : 0;
+      const relevance = (allTermsMatch ? 20 : 0) + titleHits * 5 + artistHits * 3 + exactTitle + startsWithTitle;
       const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 10;
       const exactArtistBoost = words.some(word => word.length > 2 && artist.includes(word)) ? 12 : 0;
       const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
       return { track, score: relevance + popularity + exactArtistBoost + fullTrackBonus };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
-    if (!results.length && audius.status === "rejected" && archive.status === "rejected") {
+    if (!results.length && audiusFailed && archive.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
