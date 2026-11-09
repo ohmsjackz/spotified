@@ -115,10 +115,30 @@ export async function GET(request: NextRequest) {
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
     const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
     const words = normalized.split(/\s+/).filter(Boolean);
-    const ranked = [...audiusResults, ...archiveResults].filter((track: any) => {
+
+    // A small, explicit canonical catalogue prevents unrelated same-title uploads
+    // from being presented as the requested recording. Extend only with verified
+    // artist/title pairs; never infer an artist from popularity alone.
+    const canonicalOverrides: Record<string, { title: string; artist: string; titleAliases: string[] }> = {
+      "golden hour": { title: "golden hour", artist: "JVKE", titleAliases: ["golden hour", "golden hour (official music video)"] }
+    };
+    const canonical = canonicalOverrides[normalized];
+    const candidates = [...audiusResults, ...archiveResults].filter((track: any) => {
       if (requestedVariant) return true;
-      return !/\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute|rework|edit)\b/i.test(String(track.title || ""));
-    }).map((track: any) => {
+      return !/\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version)\b/i.test(String(track.title || ""));
+    });
+    const verifiedCandidates = canonical
+      ? candidates.filter((track: any) => {
+          const title = String(track.title || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+          const artist = String(track.artist || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
+          const titleMatch = canonical.titleAliases.some(alias => title === alias || title.startsWith(alias + " "));
+          // Audius sometimes exposes a creator handle instead of the credited artist.
+          // Accept an explicit artist credit in the track title, but do not claim the
+          // uploader itself is the artist.
+          return titleMatch && (artist === canonical.artist.toLowerCase() || title.includes(canonical.artist.toLowerCase()));
+        }).map((track: any) => ({ ...track, title: canonical.title, artist: canonical.artist }))
+      : candidates;
+    const ranked = verifiedCandidates.map((track: any) => {
       const title = String(track.title || "").toLowerCase();
       const artist = String(track.artist || "").toLowerCase();
       const titleHits = words.filter(word => title.includes(word)).length;
