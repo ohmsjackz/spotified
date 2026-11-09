@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle, ExternalLink } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string };
+type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog"; license?:string; archiveUrl?:string; provider?:string; externalUrl?:string };
 type Playlist = { id:string; name:string };
 type Tab = "home"|"search"|"library";
 
@@ -127,7 +127,7 @@ export default function HomePage() {
     if(error)setMessage(error.message);else{setPlaylists(v=>[data as Playlist,...v]);setMessage("Playlist created.");}
   }
   async function addToPlaylist(t:Track){
-    if(t.source==="catalog"){setMessage("Catalogue previews cannot be added to personal playlists. Like the track to save its details.");return;}
+    if(t.source==="catalog"){setMessage("Streaming catalogue tracks can be liked, but personal playlists currently contain your uploaded files.");return;}
     if(!supabase||!user){setShowAuth(true);return;}
     if(!playlists.length){setMessage("Create a playlist first.");return;}
     const name=window.prompt("Type a playlist name:\\n"+playlists.map(p=>p.name).join("\\n"));
@@ -154,7 +154,7 @@ export default function HomePage() {
         if(!res.ok)throw new Error(data.error??"Music search is temporarily unavailable.");
         setCatalog((data.results??[]).map((x:any)=>({
           id:x.id,title:x.title,artist:x.artist,url:x.url,artwork:x.artwork,
-          source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl
+          source:"catalog" as const,license:x.license,archiveUrl:x.archiveUrl,provider:x.provider,externalUrl:x.externalUrl
         })));
         if(!(data.results??[]).length)setMessage("No full-length tracks with a verified free-use license were found. Try another search.");
       }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}
@@ -171,7 +171,7 @@ export default function HomePage() {
     const session=navigator.mediaSession;
     session.metadata=new MediaMetadata({
       title:current.title,
-      artist:current.artist || (current.source==="catalog"?"Unknown artist":"Your music"),
+      artist:current.artist || (current.source==="catalog"?(current.artist||"Unknown artist"):"Your music"),
       album:"Spotified",
       artwork:current.artwork?[{src:current.artwork,sizes:"512x512",type:"image/jpeg"}]:[]
     });
@@ -246,7 +246,7 @@ export default function HomePage() {
     <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
     {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
     {current&&<section className="player">
-      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?"Full track · Internet Archive":"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
+      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?(current.provider||"Music catalogue"):"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
       <div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
       <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
     </section>}
@@ -264,6 +264,6 @@ export default function HomePage() {
 }
 
 function TrackList({tracks,playing,liked,onPlay,onLike,onAdd}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void;onAdd:(t:Track)=>void}){
-  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{t.artist??(t.source==="catalog"?"Full track · Internet Archive":"Your upload")}</span></button>{t.source==="catalog"&&<button className="like" onClick={()=>window.open(t.url,"_blank","noopener,noreferrer")} aria-label="Open audio directly in browser"><ExternalLink size={16}/></button>}<button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
+  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{t.artist??(t.source==="catalog"?(t.provider||"Music catalogue"):"Your upload")}</span></button>{t.source==="catalog"&&<button className="like" onClick={()=>window.open(t.externalUrl||t.url,"_blank","noopener,noreferrer")} aria-label="Open audio directly in browser"><ExternalLink size={16}/></button>}<button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
 }
 function time(v:number){if(!Number.isFinite(v)||v<0)return "0:00";return Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");}
