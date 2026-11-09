@@ -37,8 +37,14 @@ async function searchAudius(query: string) {
     .map((track: any) => ({
       id: "audius-" + track.id,
       title: text(track.title) || "Untitled track",
-      // Prefer an explicit credited artist field over the uploader account name.
-      artist: text(track.artist_name) || text(track.user?.name) || "Unknown artist",
+      // Never silently relabel an uploader as the credited performer.
+      artist: (Array.isArray(track.artists) && track.artists.length
+        ? track.artists.map((artist: any) => text(artist?.name)).filter(Boolean).join(", ")
+        : text(track.artist_name)) || "Unknown artist",
+      artistCreditVerified: Boolean((Array.isArray(track.artists) && track.artists.some((artist: any) => text(artist?.name))) || text(track.artist_name)),
+      isrc: text(track.isrc) || undefined,
+      remixOf: track.remix_of || null,
+      tags: text(track.tags),
       url: "https://api.audius.co/v1/tracks/" + encodeURIComponent(track.id) + "/stream?app_name=Spotified",
       artwork: artworkUrl(track.artwork),
       source: "catalog",
@@ -126,7 +132,16 @@ export async function GET(request: NextRequest) {
     const canonical = canonicalOverrides[normalized];
     const candidates = [...audiusResults, ...archiveResults].filter((track: any) => {
       if (requestedVariant) return true;
-      return !/\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version)\b/i.test(String(track.title || ""));
+      const title = String(track.title || "").trim();
+      const artist = String(track.artist || "").trim();
+      const searchableMetadata = title + " " + String(track.tags || "");
+      const variantOrSlop = /\\b(remix|cover|karaoke|nightcore|slowed|speed.?up|sped.?up|instrumental|mashup|bootleg|tribute|rework|edit|epic version|8d audio|bass boosted|reverb|chipmunk|pitch.?shift|acapella|demo version|fan.?made|type beat|reaction|lyrics video|official music video|visualizer|music video|full album|compilation)\\b/i;
+      if (!title || !artist || artist.toLowerCase() === "unknown artist") return false;
+      if (track.provider === "Audius" && (!track.artistCreditVerified || track.remixOf)) return false;
+      if (variantOrSlop.test(searchableMetadata)) return false;
+      if (/^(untitled|unknown|track ?\\d+)$/i.test(title)) return false;
+      if (title.length < 2 || artist.length < 2 || title.length > 180 || artist.length > 120) return false;
+      return true;
     });
     const verifiedCandidates = canonical
       ? candidates.filter((track: any) => {
