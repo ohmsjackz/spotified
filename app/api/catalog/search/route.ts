@@ -24,7 +24,7 @@ function artworkUrl(value: any): string | undefined {
 }
 
 async function searchAudius(query: string) {
-  const params = new URLSearchParams({ query, limit: "20", sort_method: "relevant" });
+  const params = new URLSearchParams({ query, limit: "50", sort_method: "popular", sort_direction: "desc" });
   const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
     headers: { "User-Agent": "Spotified/1.0 (music discovery)" },
     signal: AbortSignal.timeout(10000),
@@ -42,32 +42,8 @@ async function searchAudius(query: string) {
       artwork: artworkUrl(track.artwork),
       source: "catalog",
       provider: "Audius",
+      popularity: Number(track.play_count || 0),
       externalUrl: track.permalink || ("https://audius.co/" + (track.user?.handle || "") + "/" + (track.slug || track.id))
-    }));
-}
-
-
-async function searchApple(query: string) {
-  const params = new URLSearchParams({ term: query, entity: "song", limit: "20", country: "us" });
-  const response = await fetch("https://itunes.apple.com/search?" + params.toString(), {
-    headers: { "User-Agent": "Spotified/1.0 (music discovery)" },
-    signal: AbortSignal.timeout(10000),
-    next: { revalidate: 300 }
-  });
-  if (!response.ok) throw new Error("Apple preview search unavailable");
-  const payload = await response.json();
-  const rows = Array.isArray(payload.results) ? payload.results : [];
-  return rows.filter((track: any) => track?.trackId && track.previewUrl)
-    .map((track: any) => ({
-      id: "apple-" + track.trackId,
-      title: text(track.trackName) || "Untitled track",
-      artist: text(track.artistName) || "Unknown artist",
-      url: track.previewUrl,
-      artwork: typeof track.artworkUrl100 === "string" ? track.artworkUrl100.replace("100x100bb", "600x600bb") : undefined,
-      source: "catalog",
-      provider: "Apple preview",
-      preview: true,
-      externalUrl: track.trackViewUrl
     }));
 }
 
@@ -133,27 +109,29 @@ export async function GET(request: NextRequest) {
   if (raw.length < 2) return NextResponse.json({ results: [] });
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
   try {
-    const [audius, archive, apple] = await Promise.allSettled([searchAudius(raw), searchArchive(raw), searchApple(raw)]);
+    const [audius, archive] = await Promise.allSettled([searchAudius(raw), searchArchive(raw)]);
     const audiusResults = audius.status === "fulfilled" ? audius.value : [];
     const archiveResults = archive.status === "fulfilled" ? archive.value : [];
-    const appleResults = apple.status === "fulfilled" ? apple.value : [];
     const normalized = raw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
-    const ranked = [...audiusResults, ...appleResults, ...archiveResults].map((track: any) => {
+    const words = normalized.split(/\s+/).filter(Boolean);
+    const ranked = [...audiusResults, ...archiveResults].map((track: any) => {
       const title = String(track.title || "").toLowerCase();
       const artist = String(track.artist || "").toLowerCase();
-      const words = normalized.split(/\s+/).filter(Boolean);
       const titleHits = words.filter(word => title.includes(word)).length;
       const artistHits = words.filter(word => artist.includes(word)).length;
       const allTermsMatch = words.every(word => title.includes(word) || artist.includes(word));
-      return { track, score: (allTermsMatch ? 10 : 0) + titleHits * 2 + artistHits * 4 + (title === normalized ? 3 : 0) };
+      const relevance = (allTermsMatch ? 20 : 0) + titleHits * 3 + artistHits * 5 + (title === normalized ? 8 : 0);
+      const popularity = Math.log10(1 + Math.max(0, Number(track.popularity || 0))) * 2;
+      const fullTrackBonus = track.provider === "Audius" || track.provider === "Internet Archive" ? 3 : 0;
+      return { track, score: relevance + popularity + fullTrackBonus };
     }).sort((a, b) => b.score - a.score);
     const results = ranked.slice(0, 50).map(item => item.track);
-    if (!results.length && audius.status === "rejected" && archive.status === "rejected" && apple.status === "rejected") {
+    if (!results.length && audius.status === "rejected" && archive.status === "rejected") {
       return NextResponse.json({ error: "Music search sources are temporarily unavailable. Please try again." }, { status: 502 });
     }
     return NextResponse.json({
       results,
-      sources: { audius: audiusResults.length, internetArchive: archiveResults.length, applePreviews: appleResults.length }
+      sources: { audius: audiusResults.length, internetArchive: archiveResults.length }
     }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
   } catch {
     return NextResponse.json({ error: "Music search failed. Please try again." }, { status: 502 });
