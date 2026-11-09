@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Home, Search, Library, Plus, Play, Pause, SkipBack, SkipForward, Heart, Upload, ListMusic, X, LogIn, LogOut, Music2, Shuffle, Repeat, LoaderCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Track = { id:string; title:string; url:string; storagePath:string };
+type Track = { id:string; title:string; url:string; storagePath?:string; artist?:string; artwork?:string; source?:"upload"|"catalog" };
 type Playlist = { id:string; name:string };
 type Tab = "home"|"search"|"library";
 
@@ -12,7 +12,7 @@ export default function HomePage() {
   const [tab,setTab]=useState<Tab>("home"), [user,setUser]=useState<any>(null);
   const [username,setUsername]=useState(""), [password,setPassword]=useState(""), [authMode,setAuthMode]=useState<"login"|"signup">("login"), [showAuth,setShowAuth]=useState(false);
   const [tracks,setTracks]=useState<Track[]>([]), [playlists,setPlaylists]=useState<Playlist[]>([]), [activePlaylistId,setActivePlaylistId]=useState(""), [playlistTrackIds,setPlaylistTrackIds]=useState<string[]>([]);
-  const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState("");
+  const [liked,setLiked]=useState<string[]>([]), [query,setQuery]=useState(""), [catalog,setCatalog]=useState<Track[]>([]), [searching,setSearching]=useState(false);
   const [playing,setPlaying]=useState(""), [isPlaying,setIsPlaying]=useState(false);
   const [duration,setDuration]=useState(0), [currentTime,setCurrentTime]=useState(0);
   const [shuffle,setShuffle]=useState(false), [repeat,setRepeat]=useState(false);
@@ -29,7 +29,7 @@ export default function HomePage() {
     if(a.error){setMessage(a.error.message);return;}
     const rows=await Promise.all((a.data??[]).map(async (r:any)=>{
       const {data}=await supabase!.storage.from("user-audio").createSignedUrl(r.storage_path,3600);
-      return data?.signedUrl?{id:r.id,title:r.title,url:data.signedUrl,storagePath:r.storage_path}:null;
+      return data?.signedUrl?{id:r.id,title:r.title,url:data.signedUrl,storagePath:r.storage_path,source:"upload" as const}:null;
     }));
     setTracks(rows.filter(Boolean) as Track[]);
     setPlaylists((b.data??[]) as Playlist[]);
@@ -110,7 +110,7 @@ export default function HomePage() {
       const {error}=await supabase.from("saved_tracks").delete().eq("user_id",user.id).eq("track_id",t.id);
       if(error)setMessage(error.message);else setLiked(v=>v.filter(x=>x!==t.id));
     }else{
-      const {error}=await supabase.from("saved_tracks").insert({user_id:user.id,track_id:t.id,track_data:{title:t.title}});
+      const {error}=await supabase.from("saved_tracks").insert({user_id:user.id,track_id:t.id,track_data:{title:t.title,artist:t.artist,preview_url:t.source==="catalog"?t.url:undefined,artwork:t.artwork,source:t.source}});
       if(error)setMessage(error.message);else setLiked(v=>[...v,t.id]);
     }
   }
@@ -135,7 +135,7 @@ export default function HomePage() {
     if(error){setMessage(error.message);return;}
     setPlaylistTrackIds((data??[]).map((x:any)=>x.track_id));setActivePlaylistId(p.id);
   }
-  const current=tracks.find(t=>t.id===playing);
+  useEffect(()=>{\n    const term=query.trim();\n    if(term.length<2){setCatalog([]);setSearching(false);return;}\n    const controller=new AbortController();\n    const timer=window.setTimeout(async()=>{\n      setSearching(true);\n      try{\n        const res=await fetch("https://itunes.apple.com/search?"+new URLSearchParams({term,media:"music",entity:"song",limit:"25"}),{signal:controller.signal});\n        if(!res.ok)throw new Error("Music search is temporarily unavailable.");\n        const data=await res.json();\n        setCatalog((data.results??[]).filter((x:any)=>x.previewUrl).map((x:any)=>({id:"apple-"+x.trackId,title:x.trackName,artist:x.artistName,url:x.previewUrl,artwork:x.artworkUrl100,source:"catalog" as const})));\n      }catch(e:any){if(e.name!=="AbortError")setMessage(e.message??"Music search failed.");}\n      finally{if(!controller.signal.aborted)setSearching(false);}\n    },350);\n    return()=>{window.clearTimeout(timer);controller.abort();};\n  },[query]);\n\n  const current=tracks.find(t=>t.id===playing)||catalog.find(t=>t.id===playing);
   const filtered=useMemo(()=>tracks.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())),[tracks,query]);
   const likedTracks=tracks.filter(t=>liked.includes(t.id));
   function changeTab(t:Tab){setTab(t);setShowAuth(false);}
@@ -177,7 +177,7 @@ export default function HomePage() {
     <input ref={picker} className="hidden" type="file" accept="audio/*" onChange={e=>void upload(e.target.files?.[0])}/>
     {message&&!showAuth&&<div className="toast" role="status">{message}<button onClick={()=>setMessage("")}><X size={15}/></button></div>}
     {current&&<section className="player">
-      <div className="mini-player"><div className="cover"><Music2 size={19}/></div><div className="track-meta"><b>{current.title}</b><span>Uploaded music</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
+      <div className="mini-player"><div className="cover">{current.artwork?<img src={current.artwork} alt="" />:<Music2 size={19}/>}</div><div className="track-meta"><b>{current.title}</b><span>{current.artist??(current.source==="catalog"?"Apple Music preview":"Uploaded music")}</span></div><button className="player-icon" onClick={()=>void like(current)} aria-label="Like"><Heart size={19} fill={liked.includes(current.id)?"currentColor":"none"}/></button><button className="player-icon" onClick={()=>void play(current)} aria-label={isPlaying?"Pause":"Play"}>{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button></div>
       <div className="progress"><span>{time(currentTime)}</span><input type="range" min="0" max={duration||0} value={Math.min(currentTime,duration||0)} onChange={e=>{const n=Number(e.target.value);if(audio.current)audio.current.currentTime=n;setCurrentTime(n);}}/><span>{time(duration)}</span></div>
       <div className="controls"><button className={shuffle?"selected-control":""} onClick={()=>setShuffle(v=>!v)} aria-label="Shuffle"><Shuffle size={17}/></button><button onClick={()=>skip(-1)} aria-label="Previous"><SkipBack size={20}/></button><button className="play-main" onClick={()=>void play(current)} aria-label="Play or pause">{isPlaying?<Pause size={20}/>:<Play size={20}/>}</button><button onClick={()=>skip(1)} aria-label="Next"><SkipForward size={20}/></button><button className={repeat?"selected-control":""} onClick={()=>setRepeat(v=>!v)} aria-label="Repeat"><Repeat size={17}/></button></div>
     </section>}
@@ -188,13 +188,13 @@ export default function HomePage() {
     </nav>
     <audio ref={audio} preload="metadata" onLoadedMetadata={e=>setDuration(e.currentTarget.duration||0)} onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime)} onPlay={()=>setIsPlaying(true)} onPause={()=>setIsPlaying(false)} onEnded={()=>{
       if(repeat&&audio.current){audio.current.currentTime=0;void audio.current.play();return;}
-      if(shuffle&&tracks.length>1){const list=tracks.filter(t=>t.id!==playing);const next=list[Math.floor(Math.random()*list.length)];if(next)void play(next);}
+      if(shuffle&&tracks.length+catalog.length>1){const list=[...tracks,...catalog].filter(t=>t.id!==playing);const next=list[Math.floor(Math.random()*list.length)];if(next)void play(next);}
       else skip(1);
     }}/>
   </main>;
 }
 
 function TrackList({tracks,playing,liked,onPlay,onLike,onAdd}:{tracks:Track[];playing:string;liked:string[];onPlay:(t:Track)=>void;onLike:(t:Track)=>void;onAdd:(t:Track)=>void}){
-  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>Uploaded music</span></button><button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
+  return <div className="track-list">{tracks.map((t,i)=><div className="track-row" key={t.id}><button className="track-art" onClick={()=>onPlay(t)} aria-label={"Play "+t.title}>{t.artwork?<img src={t.artwork} alt="" />:playing===t.id?<Pause size={17}/>:<Music2 size={18}/>}</button><button className="track-name" onClick={()=>onPlay(t)}><b>{t.title}</b><span>{current.artist??(current.source==="catalog"?"Apple Music preview":"Uploaded music")}</span></button><button className="like" onClick={()=>onAdd(t)} aria-label="Add to playlist"><ListMusic size={17}/></button><button className={"like "+(liked.includes(t.id)?"liked":"")} onClick={()=>onLike(t)} aria-label="Like track"><Heart size={18} fill={liked.includes(t.id)?"currentColor":"none"}/></button><span className="track-index">{i+1}</span></div>)}</div>;
 }
 function time(v:number){if(!Number.isFinite(v)||v<0)return "0:00";return Math.floor(v/60)+":"+String(Math.floor(v%60)).padStart(2,"0");}
