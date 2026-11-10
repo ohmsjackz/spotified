@@ -101,7 +101,7 @@ async function searchFreeToUse(query: string) {
   if (!rows.length) {
     const browse = new URLSearchParams({ limit: "100", order: "plays", sort: "desc" });
     payload = await request("https://api.freetouse.com/v3/music/tracks/all?" + browse.toString());
-    const terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     rows = (Array.isArray(payload?.data) ? payload.data : []).filter((track: any) => {
       const artistNames = Array.isArray(track?.artists)
         ? track.artists.map((entry: any) => Array.isArray(entry) ? entry?.[1]?.name : entry?.name).filter(Boolean).join(" ")
