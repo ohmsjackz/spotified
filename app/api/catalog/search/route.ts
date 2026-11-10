@@ -58,12 +58,13 @@ async function searchOpenverse(query: string) {
     }));
 }
 
-async function searchJamendo(query: string) {
+async function searchJamendo(query: string, language?: string) {
   const clientId = process.env.JAMENDO_CLIENT_ID;
   if (!clientId) return [];
   const params = new URLSearchParams({
-    client_id: clientId, format: "json", limit: "50", namesearch: query,
-    audioformat: "mp32", include: "musicinfo", type: "single albumtrack", order: "relevance"
+    client_id: clientId, format: "json", limit: "50", search: query,
+    audioformat: "mp32", include: "musicinfo", type: "single albumtrack", order: "relevance",
+    ...(language ? { lang: language } : {})
   });
   const response = await fetch("https://api.jamendo.com/v3.0/tracks/?" + params.toString(), {
     signal: AbortSignal.timeout(12000), next: { revalidate: 300 }
@@ -263,6 +264,13 @@ export async function GET(request: NextRequest) {
     };
     const canonical = canonicalOverrides[normalized];
     const candidates = [...openverseResults, ...audiusResults, ...jamendoResults, ...freeToUseResults, ...archiveResults].filter((track: any) => {
+      if (isThaiQuery) {
+        const metadata = [track.title, track.artist, track.tags, track.description, track.genre, track.provider]
+          .filter(Boolean).join(" ").toLowerCase();
+        const hasThaiMetadata = /[\\u0E00-\\u0E7F]|\\bthai(land)?\\b/i.test(metadata);
+        const exactThaiTextMatch = metadata.includes(normalized);
+        if (!hasThaiMetadata && !exactThaiTextMatch) return false;
+      }
       if (requestedVariant) return true;
       const title = String(track.title || "").trim();
       const artist = String(track.artist || "").trim();
