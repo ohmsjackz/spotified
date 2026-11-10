@@ -234,15 +234,17 @@ export async function GET(request: NextRequest) {
   if (raw.length > 100) return NextResponse.json({ error: "Search is limited to 100 characters." }, { status: 400 });
   try {
     const requestedVariant = /\b(remix|cover|karaoke|nightcore|slowed|speed.?up|instrumental|mashup|bootleg|tribute)\b/i.test(raw);
+    const isThaiQuery = /[\u0E00-\u0E7F]/.test(raw) || /\bthai(land)?\b/i.test(raw);
     const searchTerms = [...new Set([
       raw,
       raw.replace(/[“”‘’]/g, "").replace(/[()\[\]{}]/g, " ").replace(/\s+/g, " ").trim(),
-      raw.split(/\s+/).filter(Boolean).join(" ")
-    ])].filter(Boolean).slice(0, 3);
+      raw.split(/\s+/).filter(Boolean).join(" "),
+      ...(isThaiQuery ? ["เพลงไทย", "thai music", "thai"] : [])
+    ])].filter(Boolean).slice(0, isThaiQuery ? 5 : 3);
     const [openverseBatch, audiusBatch, jamendoBatch, freeToUseBatch, archive] = await Promise.all([
       Promise.allSettled(searchTerms.map(term => searchOpenverse(term))),
       Promise.allSettled(searchTerms.map(term => searchAudius(term))),
-      Promise.allSettled(searchTerms.map(term => searchJamendo(term))),
+      Promise.allSettled(searchTerms.map(term => searchJamendo(term, isThaiQuery ? "th" : undefined))),
       Promise.allSettled(searchTerms.map(term => searchFreeToUse(term))),
       searchArchive(raw).then(value => ({ status: "fulfilled" as const, value })).catch(error => ({ status: "rejected" as const, reason: error }))
     ]);
