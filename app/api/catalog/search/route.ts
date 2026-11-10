@@ -84,32 +84,53 @@ async function searchJamendo(query: string) {
 }
 
 async function searchFreeToUse(query: string) {
-  const params = new URLSearchParams({ query, limit: "30", order: "plays", sort: "desc" });
-  const response = await fetch("https://api.freetouse.com/v3/music/tracks/search?" + params.toString(), {
-    headers: { "User-Agent": "Spotified/1.0 (free music discovery)" },
-    signal: AbortSignal.timeout(12000),
-    next: { revalidate: 300 }
-  });
-  if (!response.ok) throw new Error("Free To Use search unavailable");
-  const payload = await response.json();
-  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const params = new URLSearchParams({ query, limit: "50", order: "plays", sort: "desc" });
+  const request = async (url: string) => {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Spotified/1.0 (personal music player)", "Accept": "application/json" },
+      signal: AbortSignal.timeout(15000),
+      next: { revalidate: 180 }
+    });
+    if (!response.ok) throw new Error("Free To Use search unavailable (" + response.status + ")");
+    return response.json();
+  };
+  let payload = await request("https://api.freetouse.com/v3/music/tracks/search?" + params.toString());
+  let rows = Array.isArray(payload?.data) ? payload.data : [];
+  // Some API responses may omit searchable rows for a query; browse the public
+  // catalogue and match locally rather than returning an empty screen.
+  if (!rows.length) {
+    const browse = new URLSearchParams({ limit: "100", order: "plays", sort: "desc" });
+    payload = await request("https://api.freetouse.com/v3/music/tracks/all?" + browse.toString());
+    const terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+    rows = (Array.isArray(payload?.data) ? payload.data : []).filter((track: any) => {
+      const artistNames = Array.isArray(track?.artists)
+        ? track.artists.map((entry: any) => Array.isArray(entry) ? entry?.[1]?.name : entry?.name).filter(Boolean).join(" ")
+        : "";
+      const haystack = [track?.title, artistNames, track?.genre,
+        ...(Array.isArray(track?.tags) ? track.tags.map((entry: any) => Array.isArray(entry) ? entry[1] : entry) : [])]
+        .filter(Boolean).join(" ").toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    });
+  }
   return rows.filter((track: any) =>
-    track?.id && track.status === 1 && track.is_premium !== true &&
-    track.title && track.files?.mp3 && Number(track.duration || 0) >= 45
+    track?.id && track.is_premium !== true && track.title &&
+    (track.files?.mp3 || track.audio_url || track.audio)
   ).map((track: any) => {
     const artists = Array.isArray(track.artists)
-      ? track.artists.map((entry: any) => text(entry?.[1]?.name)).filter(Boolean)
+      ? track.artists.map((entry: any) => Array.isArray(entry) ? entry?.[1]?.name : entry?.name).filter(Boolean)
       : [];
+    const artist = artists.join(", ") || text(track.artist_name) || text(track.artist);
+    const audioUrl = track.files?.mp3 || track.audio_url || track.audio;
     return {
       id: "freetouse-" + track.id,
       title: String(track.title).trim(),
-      artist: artists.join(", ") || "Unknown artist",
-      url: track.files.mp3,
+      artist: artist || "Unknown artist",
+      url: audioUrl,
       artwork: track.thumbnails?.md || track.thumbnails?.lg || track.thumbnails?.xl || undefined,
       duration: Number(track.duration) || undefined,
       license: "Free To Use License",
       externalUrl: "https://freetouse.com",
-      downloadUrl: track.files.mp3,
+      downloadUrl: audioUrl,
       downloadable: true,
       source: "catalog",
       provider: "Free To Use",
@@ -120,7 +141,7 @@ async function searchFreeToUse(query: string) {
 
 async function searchAudius(query: string) {
   const params = new URLSearchParams({ query, limit: "50", sort_method: "relevant" });
-  const response = await fetch("https://api.audius.co/v1/tracks/search?" + params.toString(), {
+  const response = await fetch("https://discoveryprovider.audius.co/v1/tracks/search?" + params.toString(), {
     headers: { "User-Agent": "Spotified/1.0 (music discovery)" },
     signal: AbortSignal.timeout(10000),
     next: { revalidate: 120 }
@@ -140,7 +161,7 @@ async function searchAudius(query: string) {
       isrc: text(track.isrc) || undefined,
       remixOf: track.remix_of || null,
       tags: text(track.tags),
-      url: "https://api.audius.co/v1/tracks/" + encodeURIComponent(track.id) + "/stream?app_name=Spotified",
+      url: "https://discoveryprovider.audius.co/v1/tracks/" + encodeURIComponent(track.id) + "/stream?app_name=Spotified",
       artwork: artworkUrl(track.artwork),
       source: "catalog",
       provider: "Audius",
